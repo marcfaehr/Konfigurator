@@ -325,7 +325,7 @@ def _sidebar_massnahmen(state):
         st.divider()
         st.caption("Die Handlungsfelder ergeben sich aus dem Vergleich von Ist "
                    "und Soll des Zieltyps. Ergaenze je Handlungsfeld die konkrete "
-                   "Massnahme, ordne sie einer Etappe zu und benenne eine "
+                   "Massnahme, ordne sie einer Phase zu und benenne eine "
                    "Verantwortlichkeit.")
 
 
@@ -1257,14 +1257,18 @@ def _portfolio_matrix(felder):
             st.altair_chart(diagramm, use_container_width=True)
     except Exception:
         st.dataframe(df, hide_index=True, width="stretch")
-    st.caption("Handlungsfelder mit hohem Ähnlichkeitsgewinn und geringem Aufwand "
-               "sind die naheliegenden ersten Schritte. Merkmale mit gleichem "
-               "Aufwand und Gewicht sind zu einem Punkt zusammengefasst.")
+    st.caption(
+        "Die Reihenfolge richtet sich zuerst nach dem Ähnlichkeitsgewinn und bei "
+        "gleichem Gewinn nach dem Aufwand. Zuerst kommen Handlungsfelder mit hohem "
+        "Gewinn und geringem Aufwand, danach solche mit hohem Gewinn und hohem "
+        "Aufwand, anschliessend solche mit geringem Gewinn und geringem Aufwand und "
+        "zuletzt solche mit geringem Gewinn und hohem Aufwand. Merkmale mit gleichem "
+        "Aufwand und Gewinn sind zu einem Punkt zusammengefasst.")
 
 
 def _massnahmen_eingabe(state, uid, felder):
     """Je Handlungsfeld die drei Eingaben des Anwenders: konkrete Massnahme,
-    Etappe und Verantwortlichkeit. Das Werkzeug gibt inhaltlich nichts vor."""
+    Phase und Verantwortlichkeit. Das Werkzeug gibt inhaltlich nichts vor."""
     for f in felder:
         m = f["merkmal"]
         eintrag = core.get_massnahme(state, uid, m)
@@ -1279,16 +1283,17 @@ def _massnahmen_eingabe(state, uid, felder):
                 core.set_massnahme(state, uid, m, text=text)
             sp_e, sp_w = st.columns(2)
             with sp_e:
-                stufen = list(core.AUFWAND_STUFEN)
-                aktuell = eintrag["etappe"] or core.AUFWAND_HOCH
+                phasen = list(core.PHASEN)
+                aktuell = eintrag["phase"] or core.PHASEN[-1]
                 wahl = st.selectbox(
-                    "Etappe", options=stufen, index=stufen.index(aktuell),
-                    format_func=lambda k: f"{k}. Etappe ({core.AUFWAND_LABEL[k]})",
-                    key=f"mn_et_{uid}_{m}",
-                    help="Aus dem Aufwand vorbelegt. Aenderbar, wenn Abhaengigkeiten "
-                         "zwischen Massnahmen eine andere Reihenfolge erfordern.")
-                if wahl != eintrag["etappe"]:
-                    core.set_massnahme(state, uid, m, etappe=wahl)
+                    "Phase", options=phasen, index=phasen.index(aktuell),
+                    format_func=lambda k: f"{k}. Phase",
+                    key=f"mn_ph_{uid}_{m}",
+                    help="Anfangs aus dem Aufwand vorgeschlagen. Frei anpassbar, "
+                         "etwa wenn Abhaengigkeiten zwischen Massnahmen eine andere "
+                         "Reihenfolge erfordern.")
+                if wahl != eintrag["phase"]:
+                    core.set_massnahme(state, uid, m, phase=wahl)
             with sp_w:
                 wer = st.text_input("Verantwortlich", value=eintrag["wer"],
                                     key=f"mn_wer_{uid}_{m}")
@@ -1380,22 +1385,23 @@ def _export_html(state, features, types, weights):
                      + " &nbsp; ".join(f"k={k}: {score[k]*100:.0f}%"
                                        for k in core.AUFWAND_STUFEN_K) + "</p>")
         felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
-        gruppen = core.massnahmen_nach_etappe(state, uid, felder)
+        gruppen = core.massnahmen_nach_phase(state, uid, felder)
         teile.append("<h3>Massnahmenplan</h3>")
         if not felder:
             teile.append("<p>Keine Handlungsfelder, der Zieltyp ist bereits erreicht.</p>")
-        for etappe in core.AUFWAND_STUFEN:
-            if not gruppen.get(etappe):
+        for phase in core.PHASEN:
+            if not gruppen.get(phase):
                 continue
-            teile.append(f"<h4>{etappe}. Etappe ({core.AUFWAND_LABEL[etappe]}er Aufwand)</h4>")
+            teile.append(f"<h4>{phase}. Phase</h4>")
             teile.append("<table><tr><th>Merkmal</th><th>Ist</th><th>Soll</th>"
-                         "<th>Ähnlichkeitsgewinn</th>"
+                         "<th>Aufwand</th><th>Ähnlichkeitsgewinn</th>"
                          "<th>Massnahme</th><th>Verantwortlich</th></tr>")
-            for f in gruppen[etappe]:
+            for f in gruppen[phase]:
                 mn = core.get_massnahme(state, uid, f["merkmal"])
                 teile.append(
                     f"<tr><td>{f['merkmal']}</td><td>{_fmt_auspr(f['ist'])}</td>"
                     f"<td>{f['soll']}</td>"
+                    f"<td>{core.AUFWAND_LABEL.get(f['aufwand'], '—')}</td>"
                     f"<td>+{f['gewinn'] * 100:.1f} %-Pkt.</td>"
                     f"<td>{mn['text'] or '—'}</td>"
                     f"<td>{mn['wer'] or '—'}</td></tr>")
@@ -1436,7 +1442,7 @@ def seite_massnahmen(state, features, types, weights):
 
         profil = types[typ]
         felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
-        core.etappe_vorbelegen(state, uid, felder)
+        core.phase_vorbelegen(state, uid, felder)
 
         if not felder:
             st.success("Keine Handlungsfelder: Der Zieltyp ist im aktuellen Zustand "
