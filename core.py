@@ -234,9 +234,9 @@ def empty_state():
         # 1 initialisiert und in der Zustandserfassung editiert.
         "gewichte": {},
         # MASSNAHMEN je Einheit und Merkmal (nur fuer Handlungsfelder des Zieltyps):
-        # unit_id -> { merkmal -> {"text": str, "etappe": 1|2|3, "wer": str} }.
+        # unit_id -> { merkmal -> {"text": str, "phase": 1|2|3, "wer": str} }.
         # Der Freitext und die Verantwortlichkeit stammen vollstaendig vom Anwender,
-        # die Etappe ist aus dem Aufwand vorbelegt und aenderbar.
+        # die Phase ist aus dem Aufwand vorbelegt und aenderbar.
         "massnahmen": {},
         # Phase: "konfiguration" | "ergebnis" | "potential" | "ergebnis_soll"
         #        | "detaillierung".
@@ -913,6 +913,12 @@ AUFWAND_KEIN = 0
 AUFWAND_STUFEN_K = (AUFWAND_KEIN, AUFWAND_GERING, AUFWAND_MITTEL, AUFWAND_HOCH)
 AUFWAND_LABEL = {AUFWAND_GERING: "gering", AUFWAND_MITTEL: "mittel", AUFWAND_HOCH: "hoch"}
 
+# Phasen der Maßnahmenplanung. Sie werden anfangs aus dem Aufwand vorgeschlagen,
+# sind danach aber frei gebildet und daher als eigene Groesse gefuehrt. Die Werte
+# stimmen zahlenmaessig mit den Aufwandsstufen ueberein, tragen aber keine
+# Aufwandsbedeutung mehr.
+PHASEN = (1, 2, 3)
+
 
 def set_aufwand(state, uid, typ_name, merkmal, wert):
     """Setzt den geschaetzten Aufwand (1=gering, 2=mittel, 3=hoch), um das Merkmal
@@ -1100,7 +1106,7 @@ def merkmal_status(auswahl, potential_unit, ausschluss_unit, typ_profil, merkmal
 # ====================================================== Schritt 4: Massnahmenplanung
 # Die Handlungsfelder ergeben sich unmittelbar aus dem Vergleich von Ist- und
 # Soll-Ausprägung des festgelegten Zieltyps. Der Anwender ergaenzt lediglich die
-# konkrete Massnahme, die Etappe und die Verantwortlichkeit.
+# konkrete Massnahme, die Phase und die Verantwortlichkeit.
 
 def handlungsfelder(state, uid, typ_name, typ_profil, features, weights=None):
     """Liste der Handlungsfelder eines Zieltyps. Ein Handlungsfeld erfuellt ZWEI
@@ -1163,43 +1169,44 @@ def nicht_erreichte_merkmale(state, uid, typ_name, typ_profil, features):
 
 
 def get_massnahme(state, uid, merkmal):
-    """Massnahme zu einem Handlungsfeld: dict mit text, etappe und wer.
+    """Massnahme zu einem Handlungsfeld: dict mit text, phase und wer.
     Fehlt ein Eintrag, werden leere Werte zurueckgegeben."""
     eintrag = state.get("massnahmen", {}).get(uid, {}).get(merkmal, {})
     return {"text": eintrag.get("text", ""),
-            "etappe": eintrag.get("etappe"),
+            "phase": eintrag.get("phase"),
             "wer": eintrag.get("wer", "")}
 
 
-def set_massnahme(state, uid, merkmal, text=None, etappe=None, wer=None):
+def set_massnahme(state, uid, merkmal, text=None, phase=None, wer=None):
     """Setzt einzelne Felder einer Massnahme. Nicht uebergebene Felder bleiben
     unveraendert, sodass die drei Eingaben unabhaengig voneinander sind."""
     ebene = state.setdefault("massnahmen", {}).setdefault(uid, {})
     eintrag = ebene.setdefault(merkmal, {})
     if text is not None:
         eintrag["text"] = text
-    if etappe is not None:
-        eintrag["etappe"] = etappe
+    if phase is not None:
+        eintrag["phase"] = phase
     if wer is not None:
         eintrag["wer"] = wer
 
 
-def etappe_vorbelegen(state, uid, felder):
-    """Belegt die Etappe jedes Handlungsfeldes mit seiner Aufwandsstufe vor, sofern
-    noch keine gesetzt ist. Die Reihenfolge der Umsetzung folgt damit zunaechst dem
-    Aufwand, kann vom Anwender aber geaendert werden, etwa wenn Abhaengigkeiten
-    zwischen Massnahmen bestehen. Idempotent."""
+def phase_vorbelegen(state, uid, felder):
+    """Schlaegt fuer jedes Handlungsfeld ohne gesetzte Phase eine Phase vor, und
+    zwar zunaechst anhand seiner Aufwandsstufe. Der Anwender kann diese Zuordnung
+    danach frei aendern, etwa wenn Abhaengigkeiten zwischen Massnahmen eine andere
+    Reihenfolge erfordern. Ab diesem Zeitpunkt ist die Phase von der Aufwandsstufe
+    unabhaengig. Idempotent."""
     for f in felder:
-        if get_massnahme(state, uid, f["merkmal"])["etappe"] is None:
+        if get_massnahme(state, uid, f["merkmal"])["phase"] is None:
             set_massnahme(state, uid, f["merkmal"],
-                          etappe=f["aufwand"] or AUFWAND_HOCH)
+                          phase=f["aufwand"] or PHASEN[-1])
 
 
-def massnahmen_nach_etappe(state, uid, felder):
-    """Gruppiert die Handlungsfelder nach der gewaehlten Etappe.
+def massnahmen_nach_phase(state, uid, felder):
+    """Gruppiert die Handlungsfelder nach der gewaehlten Phase.
     Rueckgabe: dict {1: [feld, ...], 2: [...], 3: [...]}."""
-    gruppen = {k: [] for k in AUFWAND_STUFEN}
+    gruppen = {k: [] for k in PHASEN}
     for f in felder:
-        etappe = get_massnahme(state, uid, f["merkmal"])["etappe"] or AUFWAND_HOCH
-        gruppen.setdefault(etappe, []).append(f)
+        phase = get_massnahme(state, uid, f["merkmal"])["phase"] or PHASEN[-1]
+        gruppen.setdefault(phase, []).append(f)
     return gruppen
