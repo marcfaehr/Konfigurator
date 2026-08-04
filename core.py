@@ -238,6 +238,14 @@ def empty_state():
         # Der Freitext und die Verantwortlichkeit stammen vollstaendig vom Anwender,
         # die Phase ist aus dem Aufwand vorbelegt und aenderbar.
         "massnahmen": {},
+        # BUENDEL: Menge von (merkmal, soll)-Paaren, die der Anwender ueber die
+        # Betrachtungseinheiten hinweg zu einem gemeinsamen Handlungsfeld
+        # zusammengelegt hat. Nur Paare, die bei mehreren Einheiten als Handlungsfeld
+        # auftreten, sind buendelbar.
+        "buendel": set(),
+        # HF_MASSNAHMEN: Massnahmen der unternehmensweiten Handlungsfelder, je
+        # Handlungsfeld ueber einen Schluessel (siehe hf_schluessel) statt je Einheit.
+        "hf_massnahmen": {},
         # Phase: "konfiguration" | "ergebnis" | "potential" | "ergebnis_soll"
         #        | "detaillierung".
         "phase": "konfiguration",
@@ -282,7 +290,7 @@ def add_unit(state, features):
 
 def remove_unit(state, uid):
     """Entfernt eine Betrachtungseinheit vollstaendig (Ist, Potential,
-    Ausschluss, engere Auswahl, Zieltyp, Soll, Aufwand, Welt). Der Zaehler
+    Ausschluss, engere Auswahl, Zieltyp, Ziel, Aufwand, Welt). Der Zaehler
     'vergeben' bleibt unveraendert."""
     for ebene in ("matrix", "potential", "ausschluss", "engere_auswahl",
                   "zieltyp", "soll", "aufwand", "welt", "massnahmen"):
@@ -310,7 +318,7 @@ def get_choice(state, uid, merkmal):
 # gleichzeitig Potential und Ausschluss sein (Regel ist selbsttragend).
 
 def set_pa_status(state, uid, merkmal, auspraegung, status):
-    """Setzt den Potential/Ausschluss-Status EINER Auspraegung.
+    """Setzt den Potential/Ausschluss-Vergleichsfall EINER Auspraegung.
     status: "" -> weder/noch, "potential" -> Potential, "ausschluss" -> Ausschluss.
     Entfernt die Auspraegung zuerst aus beiden Mengen und fuegt sie dann
     in die passende ein. So ist garantiert: nie in beiden gleichzeitig."""
@@ -323,7 +331,7 @@ def set_pa_status(state, uid, merkmal, auspraegung, status):
 
 
 def get_pa_status(state, uid, merkmal, auspraegung):
-    """Liefert den Status EINER Auspraegung: "", "potential" oder "ausschluss"."""
+    """Liefert den Vergleichsfall EINER Auspraegung: "", "potential" oder "ausschluss"."""
     if auspraegung in state["potential"][uid][merkmal]:
         return "potential"
     if auspraegung in state["ausschluss"][uid][merkmal]:
@@ -385,7 +393,7 @@ def _setze_zellzustand(state, uid, merkmal, auspraegung, neuer_zustand):
       - ZELLE_IST: setzt diese Auspraegung als Ist (genau EINE pro Merkmal,
         die vorherige Ist-Auspraegung weicht automatisch) und entfernt sie
         aus Potential/Ausschluss.
-      - ZELLE_POTENTIAL / ZELLE_AUSSCHLUSS: setzt den PA-Status; falls die
+      - ZELLE_POTENTIAL / ZELLE_AUSSCHLUSS: setzt den PA-Vergleichsfall; falls die
         Auspraegung bisher das Ist war, wird das Ist auf OFFEN gesetzt.
       - ZELLE_OFFEN: entfernt sie aus Potential/Ausschluss; war sie das Ist,
         wird das Ist auf OFFEN gesetzt."""
@@ -685,7 +693,7 @@ def eindeutigkeit(rang):
 # Dadurch ist das Soll nie schlechter als das Ist (alles Ist bleibt enthalten).
 
 def _soll_menge(auswahl, potential_unit, merkmal):
-    """Soll-Menge eines Merkmals: Ist-Auspraegung (falls echte Auspraegung)
+    """Ziel-Menge eines Merkmals: Ist-Auspraegung (falls echte Auspraegung)
     vereinigt mit den Potential-Auspraegungen.
     OFFEN traegt nichts bei (dann zaehlt nur das Potential)."""
     menge = set(potential_unit.get(merkmal, set()))
@@ -696,7 +704,7 @@ def _soll_menge(auswahl, potential_unit, merkmal):
 
 
 def uebereinstimmung_soll(auswahl, potential_unit, typ_profil, features, weights=None, ausschluss_unit=None):
-    """SOLL-KPI (SOLL-MINIMUM): gewichteter Soll-Uebereinstimmungsgrad mit EINEM Typ.
+    """SOLL-KPI (SOLL-MINIMUM): gewichteter Ziel-Uebereinstimmungsgrad mit EINEM Typ.
 
     Treffer pro Merkmal, wenn (Ist ∪ Potential) ∩ Typprofil != leer.
     ausschluss_unit optional: blockierte Merkmale sind ohnehin Nichttreffer,
@@ -761,12 +769,12 @@ def uebereinstimmung_max(auswahl, typ_profil, features, weights=None, ausschluss
 
 
 def _soll_angegeben(auswahl, potential_unit, merkmal):
-    """delta_i fuer den Soll-Zustand: True, wenn (Ist ∪ Potenzial) nicht leer ist."""
+    """delta_i fuer den Ziel-Zustand: True, wenn (Ist ∪ Potenzial) nicht leer ist."""
     return len(_soll_menge(auswahl, potential_unit, merkmal)) > 0
 
 
 def _soll_treffer(auswahl, potential_unit, typ_profil, merkmal):
-    """Lokale Soll-Aehnlichkeit: 1, wenn (Ist ∪ Potenzial) das Profil schneidet."""
+    """Lokale Ziel-Aehnlichkeit: 1, wenn (Ist ∪ Potenzial) das Profil schneidet."""
     soll = _soll_menge(auswahl, potential_unit, merkmal)
     return len(soll & typ_profil.get(merkmal, set())) > 0
 
@@ -836,7 +844,7 @@ def harte_verstoesse(ausschluss_unit, typ_profil, features):
 
 def get_engere_auswahl(state, uid):
     """Liste der Typen in Auswahl-Reihenfolge, die die Einheit zum Vergleich in
-    die Soll-Festlegung nimmt. Leer, falls keine gewaehlt."""
+    die Zieltypbestimmung nimmt. Leer, falls keine gewaehlt."""
     return state["engere_auswahl"].get(uid, [])
 
 
@@ -847,7 +855,7 @@ def is_in_engere_auswahl(state, uid, typ_name):
 
 def add_to_engere_auswahl(state, uid, typ_name):
     """Nimmt einen Typ in die engere Auswahl auf und legt seine (leere) eigene
-    Soll-Konfiguration an. Gibt True bei Erfolg zurueck, False wenn die Auswahl
+    Ziel-Konfiguration an. Gibt True bei Erfolg zurueck, False wenn die Auswahl
     den Typ bereits enthaelt."""
     liste = state["engere_auswahl"].setdefault(uid, [])
     if typ_name in liste:
@@ -858,7 +866,7 @@ def add_to_engere_auswahl(state, uid, typ_name):
 
 
 def remove_from_engere_auswahl(state, uid, typ_name):
-    """Entfernt einen Typ aus der engeren Auswahl samt seiner Soll-Konfiguration
+    """Entfernt einen Typ aus der engeren Auswahl samt seiner Ziel-Konfiguration
     und seiner Aufwaende. War er der finale Zieltyp, wird auch dieser zurueckgesetzt."""
     liste = state["engere_auswahl"].get(uid, [])
     if typ_name in liste:
@@ -886,9 +894,9 @@ def get_zieltyp(state, uid):
 
 # --- Soll-Auspraegung je Merkmal UND Typ (Schritt 6: Detaillierung) ---
 def set_soll(state, uid, typ_name, merkmal, auspraegung):
-    """Setzt die angestrebte Soll-Auspraegung eines Merkmals fuer EINEN Typ
-    (oder OFFEN). Jeder Typ der engeren Auswahl hat eine eigene Soll-Konfiguration.
-    Aendert sich das Soll, wird der zugehoerige Aufwand verworfen, da er sich auf
+    """Setzt die angestrebte Ziel-Auspraegung eines Merkmals fuer EINEN Typ
+    (oder OFFEN). Jeder Typ der engeren Auswahl hat eine eigene Ziel-Konfiguration.
+    Aendert sich das Ziel, wird der zugehoerige Aufwand verworfen, da er sich auf
     die zuvor gewaehlte Auspraegung bezog."""
     soll_typ = state["soll"].setdefault(uid, {}).setdefault(typ_name, {})
     if soll_typ.get(merkmal, OFFEN) != auspraegung:
@@ -897,7 +905,7 @@ def set_soll(state, uid, typ_name, merkmal, auspraegung):
 
 
 def get_soll(state, uid, typ_name, merkmal):
-    """Liefert die angestrebte Soll-Auspraegung eines Merkmals fuer EINEN Typ,
+    """Liefert die angestrebte Ziel-Auspraegung eines Merkmals fuer EINEN Typ,
     oder OFFEN (nicht festgelegt)."""
     return state["soll"].get(uid, {}).get(typ_name, {}).get(merkmal, OFFEN)
 
@@ -922,7 +930,7 @@ PHASEN = (1, 2, 3)
 
 def set_aufwand(state, uid, typ_name, merkmal, wert):
     """Setzt den geschaetzten Aufwand (1=gering, 2=mittel, 3=hoch), um das Merkmal
-    vom heutigen Zustand in die gewaehlte Soll-Auspraegung zu bringen, fuer EINEN Typ."""
+    vom heutigen Zustand in die gewaehlte Ziel-Auspraegung zu bringen, fuer EINEN Typ."""
     state["aufwand"].setdefault(uid, {}).setdefault(typ_name, {})[merkmal] = wert
 
 
@@ -931,35 +939,22 @@ def get_aufwand(state, uid, typ_name, merkmal):
     return state["aufwand"].get(uid, {}).get(typ_name, {}).get(merkmal)
 
 
-def soll_kandidaten(state, uid, typ_profil, merkmal, status, optionen):
-    """Auspraegungen mit Wahl-Knopf in der Soll-Festlegung, abhaengig vom Fall:
-      - Fall 2 (Potenzial passt):          Ist + die Potenziale, die im Profil liegen.
-      - Fall 3 (weder Ist noch Potenzial): Ist + alle Profilauspraegungen.
-      - Fall 4 & 5 (kein Ist):             alle Auspraegungen (freie Wahl).
-      - Fall 1 (Ist passt):                keine (Soll ist automatisch das Ist).
-    In Fall 2 werden bewusst nur die als Potenzial erfassten, im Profil liegenden
-    Auspraegungen angeboten (nicht jede Profilauspraegung), da hier bereits ein
-    erreichbarer, passender Weg erfasst ist. In Fall 3 gibt es keinen solchen Weg,
-    daher stehen alle Profilauspraegungen zur Wahl. Rueckgabe als Menge."""
-    profil = typ_profil.get(merkmal, set())
-    ist = get_choice(state, uid, merkmal)
-    if status == STATUS_POTENTIAL:
-        kand = set(get_potential(state, uid, merkmal) & profil)
-        if ist is not OFFEN:
-            kand.add(ist)
-        return kand
-    if status == STATUS_IST_UNPASSEND:
-        kand = set(profil)
-        if ist is not OFFEN:
-            kand.add(ist)
-        return kand
-    if status in (STATUS_OFFEN, STATUS_BLOCKIERT):
-        return set(optionen)
-    return set()
+def soll_kandidaten(status, optionen):
+    """Auspraegungen mit Wahl-Knopf in der Zieltypbestimmung. In Fall 1 (das Ist liegt
+    bereits im Profil) gibt es keine Wahl, da das Merkmal erfuellt ist und die
+    Ziel-Ausprägung automatisch dem Ist entspricht. In allen uebrigen Faellen (2 bis
+    5) stehen alle Auspraegungen zur freien Wahl. Damit kann der Anwender bewusst
+    auch abweichen, etwa um im Sinne einer betrachtungseinheitsuebergreifenden
+    Synergie dieselbe Ausprägung wie eine andere Einheit anzustreben. Eine
+    profilfremde Wahl bildet dann kein Handlungsfeld, sondern erscheint als nicht
+    erreichtes Merkmal. Rueckgabe als Menge."""
+    if status == STATUS_IST:
+        return set()
+    return set(optionen)
 
 
 def soll_vorbelegen(state, uid, typ_name, features):
-    """Belegt das Soll mit dem Ist vor, wo es ein Ist gibt (Faelle 1, 2, 3) und
+    """Belegt das Ziel mit dem Ist vor, wo es ein Ist gibt (Faelle 1, 2, 3) und
     noch nichts gewaehlt wurde. Faelle ohne Ist (4, 5) bleiben offen und muessen
     aktiv entschieden werden. Idempotent; sorgt dafuer, dass auch nicht geoeffnete
     Tabs vollstaendig vorbelegt sind."""
@@ -972,8 +967,8 @@ def soll_vorbelegen(state, uid, typ_name, features):
 
 
 def detaillierung_vollstaendig(state, uid, typ_name, features):
-    """True, wenn fuer JEDES Merkmal eine Entscheidung vorliegt: ein Soll (eine
-    Auspraegung oder bewusst NICHTS_ANSTREBEN) und, falls das Soll vom Ist abweicht,
+    """True, wenn fuer JEDES Merkmal eine Entscheidung vorliegt: ein Ziel (eine
+    Auspraegung oder bewusst NICHTS_ANSTREBEN) und, falls das Ziel vom Ist abweicht,
     ein erfasster Aufwand. Setzt voraus, dass zuvor soll_vorbelegen gelaufen ist."""
     for m in features:
         soll = get_soll(state, uid, typ_name, m)
@@ -989,7 +984,7 @@ def detaillierung_vollstaendig(state, uid, typ_name, features):
 def alle_detaillierungen_vollstaendig(state, features):
     """True, wenn mindestens eine Einheit eine engere Auswahl hat und alle Typen
     aller engeren Auswahlen vollstaendig detailliert sind. Vor der Pruefung wird
-    das Soll ueberall vorbelegt, damit nicht geoeffnete Tabs nicht blockieren."""
+    das Ziel ueberall vorbelegt, damit nicht geoeffnete Tabs nicht blockieren."""
     hat_auswahl = False
     for uid in state["units"]:
         for typ in get_engere_auswahl(state, uid):
@@ -1001,16 +996,16 @@ def alle_detaillierungen_vollstaendig(state, features):
 
 
 def soll_score_gestaffelt(state, uid, typ_name, typ_profil, features, weights=None):
-    """Soll-Score je Aufwandsstufe fuer EINEN Typ, als dict {0: .., 1: .., 2: .., 3: ..}.
+    """Ziel-Score je Aufwandsstufe fuer EINEN Typ, als dict {0: .., 1: .., 2: .., 3: ..}.
 
     Stufe 0 ist die bereits ohne jede Aenderung erreichte Uebereinstimmung.
 
-    Ein Merkmal ist ein Treffer, wenn seine Soll-Auspraegung im Profil liegt. Der
-    Erreichungsaufwand ist 0, wenn das Soll bereits dem Ist entspricht (schon
+    Ein Merkmal ist ein Treffer, wenn seine Ziel-Auspraegung im Profil liegt. Der
+    Erreichungsaufwand ist 0, wenn das Ziel bereits dem Ist entspricht (schon
     erreicht, kein Aufwand), sonst der erfasste Aufwand (1..3). Ein Treffer zaehlt
     in Stufe k, wenn sein Erreichungsaufwand <= k. Der Score bei Stufe k ist damit
     die erreichte gewichtete Profilkonformitaet, wenn alle Aenderungen bis
-    einschliesslich Aufwand k umgesetzt werden. Stufe 3 ist der volle Soll-Score.
+    einschliesslich Aufwand k umgesetzt werden. Stufe 3 ist der volle Ziel-Score.
 
     Nicht getroffene Merkmale (Ist belassen und nicht profilkonform, bewusst
     nichts angestrebt, oder eine nicht profilkonforme Auspraegung angestrebt)
@@ -1040,7 +1035,7 @@ def soll_score_gestaffelt(state, uid, typ_name, typ_profil, features, weights=No
 
 def aufwand_verteilung(state, uid, typ_name, typ_profil, features):
     """Zaehlt, wie viele Merkmale je Aufwandsstufe tatsaechlich zu einer
-    profilkonformen Annaeherung fuehren (Treffer mit Soll != Ist). Rueckgabe:
+    profilkonformen Annaeherung fuehren (Treffer mit Ziel != Ist). Rueckgabe:
     dict {1: n, 2: n, 3: n}. Nuetzlich, um neben dem Score zu zeigen, wie viele
     Aenderungen jede Stufe kostet."""
     zahl = {AUFWAND_GERING: 0, AUFWAND_MITTEL: 0, AUFWAND_HOCH: 0}
@@ -1068,7 +1063,7 @@ STATUS_OFFEN = "offen"                 # Fall 4: kein Ist, nicht blockiert (echt
 STATUS_BLOCKIERT = "blockiert"         # Fall 5: Profil vollstaendig ausgeschlossen
 
 def merkmal_status(auswahl, potential_unit, ausschluss_unit, typ_profil, merkmal):
-    """Bestimmt den Status EINES Merkmals der Einheit gegenueber EINEM Typ.
+    """Bestimmt den Vergleichsfall EINES Merkmals der Einheit gegenueber EINEM Typ.
     Rueckgabe: einer der STATUS_*-Werte.
 
     Logik (Reihenfolge wichtig):
@@ -1110,13 +1105,13 @@ def merkmal_status(auswahl, potential_unit, ausschluss_unit, typ_profil, merkmal
 
 def handlungsfelder(state, uid, typ_name, typ_profil, features, weights=None):
     """Liste der Handlungsfelder eines Zieltyps. Ein Handlungsfeld erfuellt ZWEI
-    Bedingungen: die Soll-Auspraegung weicht vom Ist ab (es gibt eine Veraenderung)
+    Bedingungen: die Ziel-Auspraegung weicht vom Ist ab (es gibt eine Veraenderung)
     UND sie liegt im Profil des Zieltyps (die Veraenderung fuehrt naeher an den Typ
     heran). Nur dann dient die Veraenderung der Annaeherung an den Zieltyp.
 
-    Kein Handlungsfeld sind daher: Merkmale mit Soll = Ist (keine Veraenderung),
+    Kein Handlungsfeld sind daher: Merkmale mit Ziel = Ist (keine Veraenderung),
     Merkmale ohne angestrebte Ausprägung (bewusst nichts) und Merkmale mit
-    profilfremder Soll-Ausprägung. Die beiden letzten sind bewusste Abweichungen
+    profilfremder Ziel-Ausprägung. Die beiden letzten sind bewusste Abweichungen
     vom Zieltyp und werden ueber nicht_erreichte_merkmale gesondert ausgewiesen.
 
     Rueckgabe: Liste von dicts mit merkmal, ist, soll, aufwand, gewicht, gewinn
@@ -1153,7 +1148,7 @@ def handlungsfelder(state, uid, typ_name, typ_profil, features, weights=None):
 
 
 def nicht_erreichte_merkmale(state, uid, typ_name, typ_profil, features):
-    """Merkmale, in denen der Zieltyp dauerhaft nicht erreicht wird, weil das Soll
+    """Merkmale, in denen der Zieltyp dauerhaft nicht erreicht wird, weil das Ziel
     nicht im Profil liegt oder bewusst nichts angestrebt wurde. Sie begruenden,
     warum die erreichbare Ähnlichkeit unter eins bleibt."""
     offen = []
@@ -1162,10 +1157,173 @@ def nicht_erreichte_merkmale(state, uid, typ_name, typ_profil, features):
         if soll == NICHTS_ANSTREBEN:
             offen.append((m, "bewusst nichts angestrebt"))
         elif soll is OFFEN:
-            offen.append((m, "keine Soll-Angabe"))
+            offen.append((m, "keine Ziel-Angabe"))
         elif soll not in typ_profil.get(m, set()):
-            offen.append((m, "Soll liegt ausserhalb des Profils"))
+            offen.append((m, "Ziel liegt ausserhalb des Profils"))
     return offen
+
+
+def synergie_potenzial(state, uid, merkmal, soll):
+    """Sucht andere Betrachtungseinheiten, die im selben Merkmal dieselbe
+    Ziel-Ausprägung wie das betrachtete Handlungsfeld verfolgen. Verglichen werden
+    die Ziel-Ausprägungen aller Einheiten, nicht nur ihre Handlungsfelder, damit
+    auch eine Einheit erfasst wird, welche die Ausprägung bereits besitzt.
+
+    Rueckgabe: Liste von (uid2, besitzt_bereits), aufsteigend nach uid2.
+    besitzt_bereits ist True, wenn die andere Einheit die Ausprägung schon im Ist
+    hat und damit als Vorbild dienen kann, sonst False (sie strebt sie ebenfalls an).
+    Der Parameter soll ist die Ziel-Ausprägung des Handlungsfeldes und stets eine
+    echte Profilausprägung."""
+    treffer = []
+    for uid2 in state["units"]:
+        if uid2 == uid:
+            continue
+        typ2 = get_zieltyp(state, uid2)
+        if not typ2:
+            continue                       # ohne Zieltyp keine Soll-Konfiguration
+        if get_soll(state, uid2, typ2, merkmal) == soll:
+            besitzt = get_choice(state, uid2, merkmal) == soll
+            treffer.append((uid2, besitzt))
+    treffer.sort(key=lambda t: t[0])
+    return treffer
+
+
+# ---------------------------------------- Unternehmensweite Zusammenfuehrung
+def alle_handlungsfelder(state, types, features, weights=None):
+    """Sammelt die Handlungsfelder aller Betrachtungseinheiten mit festgelegtem
+    Zieltyp. Jedes Feld wird um den Schluessel uid ergaenzt. Sortiert nach der
+    Merkmalsreihenfolge, dann nach Einheit."""
+    reihenfolge = {m: i for i, m in enumerate(features)}
+    felder = []
+    for uid in state["units"]:
+        typ = get_zieltyp(state, uid)
+        if not typ:
+            continue
+        for f in handlungsfelder(state, uid, typ, types[typ], features, weights):
+            g = dict(f)
+            g["uid"] = uid
+            felder.append(g)
+    felder.sort(key=lambda f: (reihenfolge.get(f["merkmal"], 10 ** 9), f["uid"]))
+    return felder
+
+
+def buendel_kandidaten(state, types, features, weights=None):
+    """Kombinationen aus Merkmal und Ziel-Ausprägung, die bei mehreren Einheiten
+    zugleich ein Handlungsfeld sind und sich daher zusammenlegen lassen.
+    Rueckgabe: dict {(merkmal, soll): [uid, ...]} mit mindestens zwei Einheiten."""
+    from collections import OrderedDict
+    gruppen = OrderedDict()
+    for f in alle_handlungsfelder(state, types, features, weights):
+        gruppen.setdefault((f["merkmal"], f["soll"]), []).append(f["uid"])
+    return {k: v for k, v in gruppen.items() if len(v) >= 2}
+
+
+def ist_gebuendelt(state, merkmal, soll):
+    """True, wenn der Anwender diese Kombination zusammengelegt hat."""
+    return (merkmal, soll) in state.get("buendel", set())
+
+
+def toggle_buendel(state, merkmal, soll):
+    """Legt eine Kombination aus Merkmal und Ziel-Ausprägung zusammen oder loest die
+    Zusammenlegung wieder auf. Das Zusammenlegen ist damit umkehrbar."""
+    b = state.setdefault("buendel", set())
+    schluessel = (merkmal, soll)
+    if schluessel in b:
+        b.discard(schluessel)
+    else:
+        b.add(schluessel)
+
+
+def unternehmensweite_uebersicht(state, types, features, weights=None):
+    """Zeilen der unternehmensweiten Handlungsfeld-Uebersicht, sortiert nach
+    Merkmal. Eine zusammengelegte Kombination aus Merkmal und Ziel-Ausprägung
+    erscheint als eine Zeile mit allen beteiligten Einheiten und dem summierten
+    Aehnlichkeitsgewinn, alle uebrigen Handlungsfelder als eigene Zeile je Einheit.
+
+    Jede Zeile ist ein dict mit merkmal, soll, einheiten (Liste von uids), ist
+    (gemeinsamer Wert oder None bei Unterschied), aufwand (hoechster der Gruppe oder
+    None), gewinn (Anteil, bei Buendelung summiert), gebuendelt (bool) und buendelbar
+    (bool, also mehr als eine Einheit mit gleicher Kombination)."""
+    reihenfolge = {m: i for i, m in enumerate(features)}
+    from collections import OrderedDict
+    gruppen = OrderedDict()
+    for f in alle_handlungsfelder(state, types, features, weights):
+        gruppen.setdefault((f["merkmal"], f["soll"]), []).append(f)
+
+    zeilen = []
+    for (merkmal, soll), gruppe in gruppen.items():
+        buendelbar = len(gruppe) >= 2
+        if buendelbar and ist_gebuendelt(state, merkmal, soll):
+            zeilen.append({
+                "merkmal": merkmal, "soll": soll,
+                "einheiten": [f["uid"] for f in gruppe],
+                "ist_werte": [f["ist"] for f in gruppe],   # parallel zu einheiten
+                "aufwand": max((f["aufwand"] or 0) for f in gruppe) or None,
+                "gewinn": sum(f["gewinn"] for f in gruppe),
+                "gebuendelt": True, "buendelbar": True,
+            })
+        else:
+            for f in gruppe:
+                zeilen.append({
+                    "merkmal": merkmal, "soll": soll,
+                    "einheiten": [f["uid"]],
+                    "ist_werte": [f["ist"]],
+                    "aufwand": f["aufwand"],
+                    "gewinn": f["gewinn"],
+                    "gebuendelt": False, "buendelbar": buendelbar,
+                })
+    zeilen.sort(key=lambda z: (reihenfolge.get(z["merkmal"], 10 ** 9), str(z["soll"])))
+    return zeilen
+
+
+# Maßnahmen der unternehmensweiten Ebene. Ein Handlungsfeld wird hier eindeutig
+# ueber einen Schluessel angesprochen, damit ein zusammengelegtes Vorhaben genau
+# eine Massnahme traegt und nicht je Einheit eine eigene.
+def hf_schluessel(zeile):
+    """Eindeutiger, hashbarer Schluessel eines Handlungsfeldes der
+    unternehmensweiten Ebene. Ein zusammengelegtes Handlungsfeld wird ueber Merkmal
+    und Ziel bestimmt, ein einzelnes zusaetzlich ueber seine Einheit."""
+    if zeile["gebuendelt"]:
+        return ("b", zeile["merkmal"], zeile["soll"])
+    return ("e", zeile["einheiten"][0], zeile["merkmal"])
+
+
+def get_hf_massnahme(state, schluessel):
+    """Massnahme eines unternehmensweiten Handlungsfeldes: dict mit text, phase, wer."""
+    m = state.setdefault("hf_massnahmen", {})
+    return m.get(schluessel, {"text": "", "phase": None, "wer": ""})
+
+
+def set_hf_massnahme(state, schluessel, text=None, phase=None, wer=None):
+    """Setzt Text, Phase oder Verantwortlichkeit eines unternehmensweiten
+    Handlungsfeldes. Nur uebergebene Felder werden geaendert."""
+    m = state.setdefault("hf_massnahmen", {})
+    e = m.setdefault(schluessel, {"text": "", "phase": None, "wer": ""})
+    if text is not None:
+        e["text"] = text
+    if phase is not None:
+        e["phase"] = phase
+    if wer is not None:
+        e["wer"] = wer
+
+
+def hf_phase_vorbelegen(state, zeilen):
+    """Schlaegt fuer jedes Handlungsfeld ohne gesetzte Phase eine Phase anhand des
+    Aufwands vor. Danach ist die Phase frei aenderbar. Idempotent."""
+    for z in zeilen:
+        k = hf_schluessel(z)
+        if get_hf_massnahme(state, k)["phase"] is None:
+            set_hf_massnahme(state, k, phase=(z["aufwand"] or PHASEN[-1]))
+
+
+def hf_nach_phase(state, zeilen):
+    """Gruppiert die unternehmensweiten Handlungsfelder nach ihrer Phase.
+    Rueckgabe: dict {1: [zeile, ...], 2: [...], 3: [...]}."""
+    gruppen = {p: [] for p in PHASEN}
+    for z in zeilen:
+        p = get_hf_massnahme(state, hf_schluessel(z))["phase"] or PHASEN[-1]
+        gruppen.setdefault(p, []).append(z)
+    return gruppen
 
 
 def get_massnahme(state, uid, merkmal):
