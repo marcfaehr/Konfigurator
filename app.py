@@ -198,7 +198,7 @@ def _erfassung_knopf(zustand):
 
 def seite_erfassung(state, features, weights):
     """Schritt 1+3 vereint: gemeinsame Erfassung von Ist, Potenzial, Ausschluss."""
-    st.title("Konfigurator — Zustandserfassung")
+    st.title("Konfigurator — Zustandsaufnahme")
 
     if not state["units"]:
         st.info("Noch keine Betrachtungseinheit vorhanden. "
@@ -231,7 +231,7 @@ def seite_erfassung(state, features, weights):
 def sidebar_navigation(state, features, types):
     """Phasenabhaengige Seitenleiste: Navigation (Weiter/Zurueck) und Hinweis,
     was zum Weiterkommen noch offen ist. Das Hochladefeld und der volle
-    Erfassungsstatus erscheinen nur in Schritt 1 (Zustandserfassung)."""
+    Erfassungsstatus erscheinen nur in Schritt 1 (Zustandsaufnahme)."""
     phase = state["phase"]
     if phase == "konfiguration":
         _sidebar_erfassung(state, features)
@@ -249,19 +249,19 @@ def _sidebar_bewertung(state):
     """Schritt 2 (Aehnlichkeitsbewertung): Navigation + Hinweis zur Typwahl."""
     with st.sidebar:
         st.header("Naechster Schritt")
-        if st.button("← Zurueck zur Zustandserfassung", width="stretch"):
+        if st.button("← Zurueck zur Zustandsaufnahme", width="stretch"):
             state["phase"] = "konfiguration"
             st.rerun()
         hat_auswahl = any(core.get_engere_auswahl(state, uid)
                           for uid in state["units"])
-        if st.button("Weiter zur Soll-Festlegung →", type="primary",
+        if st.button("Weiter zur Zieltypbestimmung →", type="primary",
                      width="stretch", disabled=not hat_auswahl):
             state["phase"] = "detaillierung"
             st.rerun()
         st.divider()
         if hat_auswahl:
             st.caption("Mindestens ein Typ ist in der engeren Auswahl. Du kannst "
-                       "zur Soll-Festlegung weitergehen.")
+                       "zur Zieltypbestimmung weitergehen.")
         else:
             st.caption("Waehle im Hauptbereich fuer jede Einheit bis zu drei Typen "
                        "in die engere Auswahl. Sobald mindestens ein Typ gewaehlt "
@@ -269,7 +269,7 @@ def _sidebar_bewertung(state):
 
 
 def _sidebar_sollfestlegung(state, features):
-    """Schritt 3 (Soll-Festlegung): Navigation + Hinweis, was je Fall zu tun ist."""
+    """Schritt 3 (Zieltypbestimmung): Navigation + Hinweis, was je Fall zu tun ist."""
     with st.sidebar:
         st.header("Naechster Schritt")
         if st.button("← Zurueck zur Ähnlichkeitsbewertung", width="stretch"):
@@ -282,7 +282,7 @@ def _sidebar_sollfestlegung(state, features):
             state["phase"] = "zusammenfassung"
             st.rerun()
         st.divider()
-        st.caption("Lege je Merkmal und Typ eine Soll-Angabe fest:")
+        st.caption("Lege je Merkmal und Typ eine Ziel-Angabe fest:")
         st.caption("• Faelle 2 & 3: pruefe, welche Profilauspraegung mit welchem "
                    "Aufwand erreichbar waere, oder behalte das Ist.")
         st.caption("• Faelle 4 & 5: lege fest, welche Auspraegung mit welchem "
@@ -296,7 +296,7 @@ def _sidebar_typvergleich(state):
     """Schritt 4 (Typvergleich): Navigation + Hinweis zur Zieltyp-Festlegung."""
     with st.sidebar:
         st.header("Naechster Schritt")
-        if st.button("← Zurueck zur Soll-Festlegung", width="stretch"):
+        if st.button("← Zurueck zur Zieltypbestimmung", width="stretch"):
             state["phase"] = "detaillierung"
             st.rerun()
         # Weiter erst, wenn jede Einheit mit engerer Auswahl einen Zieltyp hat.
@@ -309,7 +309,7 @@ def _sidebar_typvergleich(state):
             st.rerun()
         st.divider()
         st.caption("Vergleiche die Typen der engeren Auswahl anhand des "
-                   "gestaffelten Soll-Scores und lege je Einheit einen finalen "
+                   "gestaffelten Ziel-Scores und lege je Einheit einen finalen "
                    "Zieltyp fest.")
         if offen:
             st.warning("Noch kein Zieltyp festgelegt fuer: " + ", ".join(offen))
@@ -324,7 +324,7 @@ def _sidebar_massnahmen(state):
             st.rerun()
         st.divider()
         st.caption("Die Handlungsfelder ergeben sich aus dem Vergleich von Ist "
-                   "und Soll des Zieltyps. Ergaenze je Handlungsfeld die konkrete "
+                   "und Ziel des Zieltyps. Ergaenze je Handlungsfeld die konkrete "
                    "Massnahme, ordne sie einer Phase zu und benenne eine "
                    "Verantwortlichkeit.")
 
@@ -332,7 +332,7 @@ def _sidebar_massnahmen(state):
 def _sidebar_erfassung(state, features):
     """Seitenleiste: Stand je Einheit + Auswertungsknopf."""
     with st.sidebar:
-        st.header("Status")
+        st.header("Vergleichsfall")
 
         if not state["units"]:
             st.caption("Noch keine Betrachtungseinheit angelegt.")
@@ -499,7 +499,7 @@ def seite_potential(state, features):
 
 def seite_ergebnis_ist(state, features, types, weights):
     """ERSTES Dashboard (Phase 'ergebnis'): zeigt NUR den Ist-Zustand.
-    Kein Soll, keine harten Verstoesse (Potential ist hier noch nicht erfasst)."""
+    Kein Ziel, keine harten Verstoesse (Potential ist hier noch nicht erfasst)."""
     import pandas as pd
     import altair as alt
     FARBE_IST = "#1f77b4"   # Blau (durchgaengig fuer Ist)
@@ -584,7 +584,7 @@ def seite_ergebnis_soll(state, features, types, weights):
     """Dashboard (Phase 'ergebnis_soll'): dreiteiliges Aehnlichkeitsmass je Typ
     als Intervall (min..max) mit bereinigtem Wert, fuer Ist (blau) und
     Potenzial (orange) uebereinander. Zahlen einklappbar, Guete-KPIs,
-    Status je Typ und Typfestlegung."""
+    Vergleichsfall je Typ und Typfestlegung."""
     import pandas as pd
     import altair as alt
     FARBE_IST = "#1f77b4"    # Blau
@@ -758,7 +758,7 @@ def seite_ergebnis_soll(state, features, types, weights):
             st.caption(h)
 
         # --- Merkmals-Status je Typ (einklappbar, standardmaessig zu) ---
-        st.subheader("Merkmals-Status je Typ")
+        st.subheader("Merkmals-Vergleichsfall je Typ")
         st.caption("Aufklappen, um pro Typ zu sehen, welche Merkmale im Ist passen, "
                    "über Potenzial erreichbar sind, im Ist nicht passen, noch offen "
                    "oder blockiert sind.")
@@ -774,7 +774,7 @@ def seite_ergebnis_soll(state, features, types, weights):
                     symbol, klartext = _status_anzeige(status)
                     zeilen_status.append({
                         "Merkmal": m,
-                        "Status": f"{symbol} {klartext}",
+                        "Vergleichsfall": f"{symbol} {klartext}",
                     })
                 st.dataframe(pd.DataFrame(zeilen_status), hide_index=True, width="stretch")
 
@@ -789,7 +789,7 @@ def seite_ergebnis_soll(state, features, types, weights):
             default=[t for t in aktuelle_auswahl if t in typ_namen],
             key=f"engere_auswahl_{uid}",
             help="Je mehr Typen gewaehlt sind, desto aufwaendiger wird die "
-                 "Soll-Festlegung, da dort jedes Merkmal je Typ einzeln zu "
+                 "Zieltypbestimmung, da dort jedes Merkmal je Typ einzeln zu "
                  "entscheiden ist. Eine feste Obergrenze gibt es bewusst nicht.",
         )
         if wahl != aktuelle_auswahl:
@@ -805,7 +805,7 @@ def seite_ergebnis_soll(state, features, types, weights):
 
         if not wahl:
             st.caption("Noch keine Typen ausgewaehlt. Waehle die Typen, die du in der "
-                       "Soll-Festlegung ausgestalten und im Typvergleich vergleichen moechtest.")
+                       "Zieltypbestimmung ausgestalten und im Typvergleich vergleichen moechtest.")
         else:
             # Kurze Rueckmeldung je gewaehltem Typ, harte Verstoesse als Warnsignal.
             teile = []
@@ -822,7 +822,7 @@ def seite_ergebnis_soll(state, features, types, weights):
 def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
     """Merkmals-Tabelle in der Detaillierung, bezogen auf EINEN Typ (Tab).
     Knopfregel nach Wissenssituation:
-      - Fall 1 (Ist passt): kein Knopf, das Soll ist automatisch das Ist.
+      - Fall 1 (Ist passt): kein Knopf, das Ziel ist automatisch das Ist.
       - Fall 2 & 3 (es gibt ein Ist): Knoepfe hinter den Kandidaten (Ist,
         Potenziale, Profil). Das Ist ist initial angestrebt; der Nutzer kann es
         belassen oder zu einem Potenzial oder einer Profilauspraegung wechseln.
@@ -840,11 +840,10 @@ def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
 
     ist_unbekannt_fall = status in (core.STATUS_OFFEN, core.STATUS_BLOCKIERT)
 
-    # Kandidaten (Auspraegungen mit Knopf) fallabhaengig bestimmen (siehe
-    # core.soll_kandidaten): Fall 2 Ist + passende Potenziale, Fall 3 Ist +
-    # Profil, Fall 4/5 alle, Fall 1 keine.
-    kandidaten = core.soll_kandidaten(state, uid, types[typ], merkmal,
-                                      status, optionen)
+    # Kandidaten (Auspraegungen mit Knopf): in Fall 1 keine (Ist ist erfuellt),
+    # in allen uebrigen Faellen alle Auspraegungen zur freien Wahl (siehe
+    # core.soll_kandidaten).
+    kandidaten = core.soll_kandidaten(status, optionen)
 
     # (Die Soll-Vorbelegung fuer Faelle 1/2/3 erfolgt zentral in
     #  seite_detaillierung via core.soll_vorbelegen, damit auch nicht geoeffnete
@@ -857,7 +856,7 @@ def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
     kopf[0].caption("Ziel")
     kopf[1].caption("Auspraegung")
     kopf[2].caption("deine Angabe")
-    kopf[3].caption("Soll")
+    kopf[3].caption("Ziel")
 
     for opt in optionen:
         z = st.columns(breiten)
@@ -905,7 +904,7 @@ def _detail_soll_spalte(state, uid, typ, merkmal, opt, status, soll_wert,
     Schritt 1 zu aendern."""
     if status == core.STATUS_IST:
         if opt == ist_wert:
-            spalte.markdown("● **Soll**")
+            spalte.markdown("● **Ziel**")
         else:
             spalte.markdown("&nbsp;", unsafe_allow_html=True)
         return
@@ -919,8 +918,8 @@ def _detail_soll_spalte(state, uid, typ, merkmal, opt, status, soll_wert,
 
 def _aufwand_auswahl(state, uid, typ, merkmal, soll_wert):
     """Pflicht-Aufwandsabfrage (gering/mittel/hoch) fuer ein Merkmal mit
-    gewaehltem Soll, das vom Ist abweicht. Der Wert misst, wie aufwaendig es ist,
-    das Merkmal vom heutigen Zustand in die Soll-Auspraegung zu bringen."""
+    gewaehltem Ziel, das vom Ist abweicht. Der Wert misst, wie aufwaendig es ist,
+    das Merkmal vom heutigen Zustand in die Ziel-Auspraegung zu bringen."""
     aktuell = core.get_aufwand(state, uid, typ, merkmal)
     sp = st.columns([3, 2, 2, 2])
     if aktuell is None:
@@ -938,11 +937,11 @@ def _aufwand_auswahl(state, uid, typ, merkmal, soll_wert):
 
 
 def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, spalte):
-    """Wahl-Knopf fuer die Soll-Auspraegung, fuer EINEN Typ. Kein Toggle:
+    """Wahl-Knopf fuer die Ziel-Auspraegung, fuer EINEN Typ. Kein Toggle:
     die aktive Auspraegung ist ein Marker, inaktive sind waehlbare Knoepfe. Der
     Key enthaelt den Typ, damit Knoepfe verschiedener Tabs nicht kollidieren."""
     if opt == soll_wert:
-        spalte.markdown("● **Soll**")
+        spalte.markdown("● **Ziel**")
     else:
         if spalte.button("○ waehlen", key=f"soll_{uid}_{typ}_{merkmal}_{opt}",
                          type="secondary", width="stretch"):
@@ -953,7 +952,7 @@ def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, spalte):
 def _nichts_anstreben_knopf(state, uid, typ, merkmal, soll_wert):
     """Knopf 'nichts anstreben' fuer die Faelle 4 und 5 (kein Ist). Eine bewusste
     Entscheidung, fuer dieses Merkmal zu diesem Typ nichts anzustreben; sie zaehlt
-    im Soll-Score als Nichttreffer und erfuellt die Pflicht zur Angabe. Toggle:
+    im Ziel-Score als Nichttreffer und erfuellt die Pflicht zur Angabe. Toggle:
     erneuter Klick macht sie rueckgaengig (zurueck zu offen/unentschieden)."""
     if soll_wert == core.NICHTS_ANSTREBEN:
         if st.button("● nichts anstreben (gewählt)",
@@ -968,7 +967,7 @@ def _nichts_anstreben_knopf(state, uid, typ, merkmal, soll_wert):
 
 
 def _detail_tab_inhalt(state, features, types, uid, typ):
-    """Inhalt eines Typ-Tabs in der Detaillierung: Status-Kennzahlen und die fuenf
+    """Inhalt eines Typ-Tabs in der Detaillierung: Vergleichsfall-Kennzahlen und die fuenf
     Abschnitte mit Merkmalstabellen, bezogen auf DIESEN Typ. Die Festlegung des
     finalen Zieltyps erfolgt spaeter in der Zusammenfassung."""
     # --- Merkmale nach Status gruppieren (fuer DIESEN Typ) ---
@@ -996,7 +995,7 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
          "Hier besteht kein Handlungsbedarf und kein Aufwand."),
         (core.STATUS_POTENTIAL, "🟠 Passt im Potenzial",
          "Eine als Potenzial erfasste Auspraegung liegt im Profil. Waehle die "
-         "Soll-Auspraegung und gib den Aufwand an, das Potenzial auszuschoepfen."),
+         "Ziel-Auspraegung und gib den Aufwand an, das Potenzial auszuschoepfen."),
         (core.STATUS_IST_UNPASSEND, "🔶 Passt weder im Ist noch im Potenzial",
          "Weder die Ist-Auspraegung noch eine Potenzial-Auspraegung liegt im Profil. "
          "Entweder du behaeltst das Ist und akzeptierst, dass die Einheit hier nicht "
@@ -1004,13 +1003,13 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
          "den Aufwand an, vom heutigen Ist dorthin zu gelangen."),
         (core.STATUS_OFFEN,     "⬜ Offen / Nicht blockiert",
          "Fuer dieses Merkmal liegt keine Angabe vor. Du hast die freie Wahl: "
-         "waehle eine Soll-Auspraegung (orientiere dich am ✅ Profil) und "
+         "waehle eine Ziel-Auspraegung (orientiere dich am ✅ Profil) und "
          "gib den Aufwand an, sie zu etablieren, oder waehle „nichts anstreben“."),
         (core.STATUS_BLOCKIERT, "⛔ Ausgeschlossen / Blockiert",
          "Alle profilkonformen Auspraegungen wurden ausgeschlossen. Du hast "
          "dennoch die freie Wahl: auch eine ausgeschlossene Auspraegung ist "
          "waehlbar, ohne die Erfassung in Schritt 1 zu aendern. Waehle eine "
-         "Soll-Auspraegung und gib den Aufwand an, oder waehle „nichts "
+         "Ziel-Auspraegung und gib den Aufwand an, oder waehle „nichts "
          "anstreben“."),
     ]
     for status, titel, hinweis in abschnitte:
@@ -1021,7 +1020,7 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
                                               core.STATUS_OFFEN)
                                    and len(merkmale) > 0)):
             if not merkmale:
-                st.caption("— keine Merkmale in diesem Status —")
+                st.caption("— keine Merkmale in diesem Vergleichsfall —")
             else:
                 st.caption(hinweis)
                 for m in merkmale:
@@ -1031,7 +1030,7 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
 
 
 def seite_detaillierung(state, features, types, weights):
-    st.title("Konfigurator — Soll-Festlegung")
+    st.title("Konfigurator — Zieltypbestimmung")
 
     # Das Soll wird in der Seitenleiste (alle_detaillierungen_vollstaendig) fuer
     # die Faelle 1/2/3 vorbelegt; die Seitenleiste laeuft vor dieser Seite.
@@ -1191,46 +1190,61 @@ def _fmt_auspr(wert):
     return "—" if wert is core.OFFEN else str(wert)
 
 
-def _handlungsfeld_tabelle(felder):
-    """Automatisch erzeugte Uebersicht der Handlungsfelder."""
+def _handlungsfeld_tabelle(state, uid, felder):
+    """Automatisch erzeugte Uebersicht der Handlungsfelder je Betrachtungseinheit.
+    Die Spalte Synergiepotenzial nennt andere Einheiten mit gleicher Ziel-Ausprägung
+    und ist reine Anzeige, die Zusammenfuehrung erfolgt im naechsten Schritt."""
     import pandas as pd
     zeilen = []
+    hat_synergie = False
+    hat_vorbild = False
     for f in felder:
+        treffer = core.synergie_potenzial(state, uid, f["merkmal"], f["soll"])
+        teile = []
+        for uid2, besitzt in treffer:
+            teile.append(f"{uid2}*" if besitzt else uid2)
+            hat_vorbild = hat_vorbild or besitzt
+        if treffer:
+            hat_synergie = True
         zeilen.append({
             "Merkmal": f["merkmal"],
             "Ist": _fmt_auspr(f["ist"]),
-            "Soll": f["soll"],
+            "Ziel": f["soll"],
             "Aufwand": core.AUFWAND_LABEL.get(f["aufwand"], "—"),
-            "Gewicht": f"{f['gewicht']:g}",
             "Ähnlichkeitsgewinn": f"+{f['gewinn'] * 100:.1f} %-Pkt.",
+            "Synergiepotenzial": ", ".join(teile) if teile else "—",
         })
     st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+    if hat_synergie:
+        txt = ("Synergiepotenzial nennt weitere Betrachtungseinheiten, die im selben "
+               "Merkmal dieselbe Ziel-Ausprägung verfolgen.")
+        if hat_vorbild:
+            txt += (" Ein Sternchen kennzeichnet eine Einheit, welche die Ausprägung "
+                    "bereits besitzt und damit als Vorbild dienen kann.")
+        st.caption(txt)
 
 
-def _portfolio_matrix(felder):
+def _portfolio_matrix(punkte):
     """Aufwand-Wirkung-Portfolio: Aufwand auf der Abszisse, Ähnlichkeitsgewinn auf
     der Ordinate. Handlungsfelder mit hohem Gewinn und geringem Aufwand liegen links
-    oben und sind die naheliegenden ersten Schritte. Der Gewinn ist die normierte
-    Form des Gewichts und daher die anschaulichere Achse (Prozentpunkte)."""
+    oben und sind die naheliegenden ersten Schritte. Erwartet je Punkt ein dict mit
+    label, aufwand und gewinn (Anteil)."""
     import pandas as pd
-    if not felder:
+    if not punkte:
         return
-    # Handlungsfelder mit gleichem Aufwand UND gleichem Gewinn liegen im Portfolio
-    # deckungsgleich. Sie werden daher zu einem Punkt zusammengefasst und gemeinsam
-    # beschriftet, damit sich die Beschriftungen nicht ueberdecken.
+    # Punkte mit gleichem Aufwand UND gleichem Gewinn liegen deckungsgleich. Sie
+    # werden zu einem Punkt zusammengefasst und gemeinsam beschriftet, damit sich
+    # die Beschriftungen nicht ueberdecken.
     gruppen = {}
-    for f in felder:
-        schluessel = (f["aufwand"] or core.AUFWAND_HOCH, round(f["gewinn"], 6))
-        gruppen.setdefault(schluessel, []).append(f["merkmal"])
+    for p in punkte:
+        schluessel = (p["aufwand"] or core.AUFWAND_HOCH, round(p["gewinn"], 6))
+        gruppen.setdefault(schluessel, []).append(p["label"])
     zeilen = [{"aufwand": a, "gewinn": g * 100,
-               "merkmal": ", ".join(namen), "anzahl": len(namen)}
+               "label": ", ".join(namen), "anzahl": len(namen)}
               for (a, g), namen in gruppen.items()]
     df = pd.DataFrame(zeilen)
     try:
         import altair as alt
-        # Gemeinsame Achsen fuer beide Ebenen. Die Groesse (size) wird NUR auf die
-        # Kreise angewendet, nicht auf den Text, da size bei mark_text sonst als
-        # Schriftgroesse interpretiert wuerde und die Beschriftung riesig geraet.
         basis = alt.Chart(df).encode(
             x=alt.X("aufwand:Q", scale=alt.Scale(domain=[0.5, 3.5], nice=False),
                     axis=alt.Axis(values=[1, 2, 3], title="Aufwand",
@@ -1239,18 +1253,17 @@ def _portfolio_matrix(felder):
             y=alt.Y("gewinn:Q", scale=alt.Scale(zero=True),
                     axis=alt.Axis(title="Ähnlichkeitsgewinn (Prozentpunkte)")),
         )
-        punkte = basis.mark_circle(opacity=0.7).encode(
+        kreise = basis.mark_circle(opacity=0.7).encode(
             size=alt.Size("anzahl:Q", legend=None,
                           scale=alt.Scale(domain=[1, 6], range=[160, 420])),
-            tooltip=[alt.Tooltip("merkmal:N", title="Merkmale"),
+            tooltip=[alt.Tooltip("label:N", title="Handlungsfeld"),
                      alt.Tooltip("aufwand:Q", title="Aufwand"),
                      alt.Tooltip("gewinn:Q", title="Ähnlichkeitsgewinn (%-Pkt.)",
                                  format=".1f")],
         )
         beschriftung = basis.mark_text(
-            align="left", dx=12, fontSize=11, baseline="middle").encode(
-            text="merkmal:N")
-        diagramm = (punkte + beschriftung).properties(height=340)
+            align="left", dx=12, fontSize=11, baseline="middle").encode(text="label:N")
+        diagramm = (kreise + beschriftung).properties(height=340)
         try:
             st.altair_chart(diagramm, width="stretch")
         except TypeError:
@@ -1262,43 +1275,47 @@ def _portfolio_matrix(felder):
         "gleichem Gewinn nach dem Aufwand. Zuerst kommen Handlungsfelder mit hohem "
         "Gewinn und geringem Aufwand, danach solche mit hohem Gewinn und hohem "
         "Aufwand, anschliessend solche mit geringem Gewinn und geringem Aufwand und "
-        "zuletzt solche mit geringem Gewinn und hohem Aufwand. Merkmale mit gleichem "
-        "Aufwand und Gewinn sind zu einem Punkt zusammengefasst.")
+        "zuletzt solche mit geringem Gewinn und hohem Aufwand. Punkte mit gleichem "
+        "Aufwand und Gewinn sind zusammengefasst.")
 
 
-def _massnahmen_eingabe(state, uid, felder):
-    """Je Handlungsfeld die drei Eingaben des Anwenders: konkrete Massnahme,
-    Phase und Verantwortlichkeit. Das Werkzeug gibt inhaltlich nichts vor."""
-    for f in felder:
-        m = f["merkmal"]
-        eintrag = core.get_massnahme(state, uid, m)
-        with st.expander(
-                f"{m}:  {_fmt_auspr(f['ist'])} → {f['soll']}"
-                f"   ({core.AUFWAND_LABEL.get(f['aufwand'], '—')} Aufwand)"):
-            text = st.text_area(
-                "Massnahme", value=eintrag["text"], key=f"mn_txt_{uid}_{m}",
-                placeholder="Was ist konkret zu tun, um die Soll-Auspraegung zu erreichen?",
-                height=80)
-            if text != eintrag["text"]:
-                core.set_massnahme(state, uid, m, text=text)
-            sp_e, sp_w = st.columns(2)
-            with sp_e:
-                phasen = list(core.PHASEN)
-                aktuell = eintrag["phase"] or core.PHASEN[-1]
-                wahl = st.selectbox(
-                    "Phase", options=phasen, index=phasen.index(aktuell),
-                    format_func=lambda k: f"{k}. Phase",
-                    key=f"mn_ph_{uid}_{m}",
-                    help="Anfangs aus dem Aufwand vorgeschlagen. Frei anpassbar, "
-                         "etwa wenn Abhaengigkeiten zwischen Massnahmen eine andere "
-                         "Reihenfolge erfordern.")
-                if wahl != eintrag["phase"]:
-                    core.set_massnahme(state, uid, m, phase=wahl)
-            with sp_w:
-                wer = st.text_input("Verantwortlich", value=eintrag["wer"],
-                                    key=f"mn_wer_{uid}_{m}")
-                if wer != eintrag["wer"]:
-                    core.set_massnahme(state, uid, m, wer=wer)
+def _paretokurve(punkte):
+    """Kumulative Paretokurve: die Handlungsfelder nach absteigendem Ähnlichkeits-
+    gewinn geordnet, aufgetragen ist der aufsummierte Gewinn. Die Kurve steigt
+    zuerst steil und flacht ab, sodass sichtbar wird, dass wenige Handlungsfelder den
+    Grossteil der Annaeherung tragen."""
+    import pandas as pd
+    if not punkte:
+        return
+    sortiert = sorted(punkte, key=lambda p: -p["gewinn"])
+    zeilen = []
+    kum = 0.0
+    for i, p in enumerate(sortiert, 1):
+        kum += p["gewinn"] * 100
+        zeilen.append({"Rang": i, "kumuliert": round(kum, 2), "label": p["label"]})
+    df = pd.DataFrame(zeilen)
+    try:
+        import altair as alt
+        linie = alt.Chart(df).mark_line(point=True).encode(
+            x=alt.X("Rang:Q", scale=alt.Scale(domain=[0.5, len(zeilen) + 0.5]),
+                    axis=alt.Axis(title="Handlungsfelder nach Gewinn geordnet",
+                                  tickMinStep=1, format="d")),
+            y=alt.Y("kumuliert:Q", scale=alt.Scale(zero=True),
+                    axis=alt.Axis(title="kumulierter Ähnlichkeitsgewinn (%-Pkt.)")),
+            tooltip=[alt.Tooltip("label:N", title="Handlungsfeld"),
+                     alt.Tooltip("Rang:Q", title="Rang"),
+                     alt.Tooltip("kumuliert:Q", title="kumuliert (%-Pkt.)",
+                                 format=".1f")])
+        diagramm = linie.properties(height=300)
+        try:
+            st.altair_chart(diagramm, width="stretch")
+        except TypeError:
+            st.altair_chart(diagramm, use_container_width=True)
+    except Exception:
+        st.dataframe(df, hide_index=True, width="stretch")
+    st.caption("Wenige hoch gewichtete Handlungsfelder tragen den Grossteil der "
+               "Annaeherung an die Zieltypen. Die flach auslaufenden Handlungsfelder "
+               "sind nachrangig.")
 
 
 def _morphologie_html(state, uid, typ_name, typ_profil, features):
@@ -1306,9 +1323,9 @@ def _morphologie_html(state, uid, typ_name, typ_profil, features):
     Auspraegungen, das Profil des Zieltyps grau hinterlegt.
 
     Die Merkmale sind nach der Erfassungsregel in zwei Bloecke geteilt. Bei
-    bekanntem Ist-Zustand werden die Ist- und die Soll-Auspraegung gekennzeichnet,
-    bei Uebereinstimmung beider als Ist = Soll. Bei unbekanntem Ist-Zustand wird
-    allein die Soll-Auspraegung ausgewiesen."""
+    bekanntem Ist-Zustand werden die Ist- und die Ziel-Auspraegung gekennzeichnet,
+    bei Uebereinstimmung beider als Ist = Ziel. Bei unbekanntem Ist-Zustand wird
+    allein die Ziel-Auspraegung ausgewiesen."""
     bekannt, unbekannt = [], []
     for m in features:
         (bekannt if core.get_choice(state, uid, m) is not core.OFFEN
@@ -1330,11 +1347,11 @@ def _morphologie_html(state, uid, typ_name, typ_profil, features):
             marke, klasse = "", "kp" if a in profil else ""
             if i_ist is not None and i_soll is not None and i_ist == i_soll:
                 if j == i_ist:
-                    marke = "Ist = Soll"
+                    marke = "Ist = Ziel"
             elif j == i_ist:
                 marke = "Ist"
             elif j == i_soll:
-                marke = "Soll"
+                marke = "Ziel"
             stil = f' class="{klasse}"' if klasse else ""
             inhalt = f"{a}<br><span class='mk'>{marke}</span>" if marke else a
             zellen.append(f"<td{stil}>{inhalt}</td>")
@@ -1350,8 +1367,8 @@ def _morphologie_html(state, uid, typ_name, typ_profil, features):
         teile.extend(zeile(m) for m in gruppe)
     teile.append("</table>")
     teile.append("<p class='leg'>Grau hinterlegt: Konfigurationsprofil des Zieltyps. "
-                 "Bei bekanntem Ist-Zustand sind die Ist- und die Soll-Auspraegung "
-                 "gekennzeichnet, bei Uebereinstimmung beider als Ist = Soll.</p>")
+                 "Bei bekanntem Ist-Zustand sind die Ist- und die Ziel-Auspraegung "
+                 "gekennzeichnet, bei Uebereinstimmung beider als Ist = Ziel.</p>")
     return "\n".join(teile)
 
 
@@ -1372,6 +1389,35 @@ def _export_html(state, features, types, weights):
              "span.mk{font-weight:700;font-size:8pt;white-space:nowrap}",
              "p.leg{font-size:9pt;color:#444}</style></head><body>",
              "<h1>Ergebnis des Konfigurationsvorgehens</h1>"]
+
+    # Unternehmensweiter Massnahmenplan, nach Phasen geordnet.
+    zeilen = _uw_zeilen(state, features, types, weights)
+    if zeilen:
+        core.hf_phase_vorbelegen(state, zeilen)
+        gruppen = core.hf_nach_phase(state, zeilen)
+        teile.append("<h2>Unternehmensweiter Massnahmenplan</h2>")
+        for phase in core.PHASEN:
+            if not gruppen.get(phase):
+                continue
+            teile.append(f"<h3>{phase}. Phase</h3>")
+            teile.append("<table><tr><th>Merkmal</th><th>Einheit(en)</th>"
+                         "<th>Ist</th><th>Ziel</th><th>Aufwand</th>"
+                         "<th>Ähnlichkeitsgewinn</th><th>Massnahme</th>"
+                         "<th>Verantwortlich</th></tr>")
+            for z in gruppen[phase]:
+                mn = core.get_hf_massnahme(state, core.hf_schluessel(z))
+                einh = ", ".join(f"BE {u}" for u in z["einheiten"])
+                teile.append(
+                    f"<tr><td>{z['merkmal']}</td><td>{einh}</td>"
+                    f"<td>{_ist_anzeige(z['ist_werte'])}</td><td>{z['soll']}</td>"
+                    f"<td>{core.AUFWAND_LABEL.get(z['aufwand'], '—')}</td>"
+                    f"<td>+{z['gewinn'] * 100:.1f} %-Pkt.</td>"
+                    f"<td>{mn['text'] or '—'}</td>"
+                    f"<td>{mn['wer'] or '—'}</td></tr>")
+            teile.append("</table>")
+
+    # Je Einheit die erreichbare Ähnlichkeit, der morphologische Kasten und die
+    # nicht erreichten Merkmale.
     for uid in state["units"]:
         typ = core.get_zieltyp(state, uid)
         teile.append(f"<h2>Betrachtungseinheit {uid}</h2>")
@@ -1384,28 +1430,6 @@ def _export_html(state, features, types, weights):
         teile.append("<p><b>Erreichbare Ähnlichkeit je Aufwandsstufe:</b> "
                      + " &nbsp; ".join(f"k={k}: {score[k]*100:.0f}%"
                                        for k in core.AUFWAND_STUFEN_K) + "</p>")
-        felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
-        gruppen = core.massnahmen_nach_phase(state, uid, felder)
-        teile.append("<h3>Massnahmenplan</h3>")
-        if not felder:
-            teile.append("<p>Keine Handlungsfelder, der Zieltyp ist bereits erreicht.</p>")
-        for phase in core.PHASEN:
-            if not gruppen.get(phase):
-                continue
-            teile.append(f"<h4>{phase}. Phase</h4>")
-            teile.append("<table><tr><th>Merkmal</th><th>Ist</th><th>Soll</th>"
-                         "<th>Aufwand</th><th>Ähnlichkeitsgewinn</th>"
-                         "<th>Massnahme</th><th>Verantwortlich</th></tr>")
-            for f in gruppen[phase]:
-                mn = core.get_massnahme(state, uid, f["merkmal"])
-                teile.append(
-                    f"<tr><td>{f['merkmal']}</td><td>{_fmt_auspr(f['ist'])}</td>"
-                    f"<td>{f['soll']}</td>"
-                    f"<td>{core.AUFWAND_LABEL.get(f['aufwand'], '—')}</td>"
-                    f"<td>+{f['gewinn'] * 100:.1f} %-Pkt.</td>"
-                    f"<td>{mn['text'] or '—'}</td>"
-                    f"<td>{mn['wer'] or '—'}</td></tr>")
-            teile.append("</table>")
         teile.append("<h3>Morphologischer Kasten mit Zielkonfiguration</h3>")
         teile.append(_morphologie_html(state, uid, typ, profil, features))
         nicht = core.nicht_erreichte_merkmale(state, uid, typ, profil, features)
@@ -1419,6 +1443,132 @@ def _export_html(state, features, types, weights):
     return "\n".join(teile)
 
 
+def _ist_anzeige(ist_werte):
+    """Ist-Spalte eines unternehmensweiten Handlungsfeldes. Sind alle Ist-Werte
+    gleich, wird einer gezeigt, sonst die einzelnen Werte parallel zu den Einheiten."""
+    if len(set(ist_werte)) == 1:
+        return _fmt_auspr(ist_werte[0])
+    return ", ".join(_fmt_auspr(iw) for iw in ist_werte)
+
+
+def _hf_key_str(k):
+    """Stringform eines Handlungsfeld-Schluessels fuer Streamlit-Widget-Keys."""
+    return "hf_" + "_".join(str(x) for x in k)
+
+
+def _uw_zeilen(state, features, types, weights):
+    """Unternehmensweite Handlungsfeld-Zeilen, oder None wenn keine Einheit einen
+    Zieltyp hat. Die Zeilen tragen auch bei nur einer Einheit, das Zusammenlegen
+    (Harmonisierung) setzt jedoch mehrere Einheiten voraus."""
+    mit_ziel = [u for u in state["units"] if core.get_zieltyp(state, u)]
+    if not mit_ziel:
+        return None
+    return core.unternehmensweite_uebersicht(state, types, features, weights)
+
+
+def _harmonisierung(state, features, types, weights):
+    """Bereich 2: unternehmensweite Zusammenfuehrung. Hier werden aus den
+    Abweichungen der Einheiten Handlungsfelder, und gleiche Ziele lassen sich zu
+    einem gemeinsamen Handlungsfeld zusammenlegen."""
+    import pandas as pd
+    zeilen = _uw_zeilen(state, features, types, weights)
+    if zeilen is None:
+        return
+
+    st.header("Harmonisierung")
+    st.caption("Die Abweichungen aller Betrachtungseinheiten werden hier zu "
+               "Handlungsfeldern und nach Merkmal geordnet zusammengefuehrt. Wo "
+               "mehrere Einheiten dieselbe Ziel-Ausprägung anstreben, laesst sich das "
+               "Handlungsfeld zusammenlegen und einmal gemeinsam umsetzen. Der "
+               "Ähnlichkeitsgewinn eines zusammengelegten Handlungsfeldes ist die "
+               "Summe ueber die beteiligten Einheiten.")
+
+    tab = []
+    for z in zeilen:
+        tab.append({
+            "Merkmal": z["merkmal"],
+            "Einheit(en)": ", ".join(f"BE {u}" for u in z["einheiten"]),
+            "Ist": _ist_anzeige(z["ist_werte"]),
+            "Ziel": z["soll"],
+            "Aufwand": core.AUFWAND_LABEL.get(z["aufwand"], "—"),
+            "Ähnlichkeitsgewinn": f"+{z['gewinn'] * 100:.1f} %-Pkt.",
+        })
+    st.dataframe(pd.DataFrame(tab), hide_index=True, width="stretch")
+
+    kand = core.buendel_kandidaten(state, types, features, weights)
+    if kand:
+        st.markdown("**Synergien zusammenlegen**")
+        for (merkmal, soll), einheiten in kand.items():
+            beteiligt = ", ".join(f"BE {u}" for u in einheiten)
+            aktuell = core.ist_gebuendelt(state, merkmal, soll)
+            neu = st.checkbox(f"{merkmal} → {soll}  ({beteiligt})", value=aktuell,
+                              key=f"buendel_{merkmal}_{soll}")
+            if neu != aktuell:
+                core.toggle_buendel(state, merkmal, soll)
+                st.rerun()
+    st.caption("Pruefen Sie zusaetzlich inhaltliche Synergien, die das Werkzeug "
+               "nicht erkennt, etwa wenn verschiedene Merkmale dieselbe Ressource "
+               "erfordern.")
+
+
+def _priorisierung(state, features, types, weights):
+    """Bereich 3: unternehmensweite Priorisierung ueber Portfolio und kumulative
+    Paretokurve. Gebuendelte Handlungsfelder gehen mit ihrem summierten Gewinn ein."""
+    zeilen = _uw_zeilen(state, features, types, weights)
+    if zeilen is None or not zeilen:
+        return
+    st.header("Priorisierung")
+    punkte = [{"label": z["merkmal"], "aufwand": z["aufwand"], "gewinn": z["gewinn"]}
+              for z in zeilen]
+    st.subheader("Aufwand-Wirkung-Portfolio")
+    _portfolio_matrix(punkte)
+    st.subheader("Kumulative Wirkung")
+    _paretokurve(punkte)
+
+
+def _detaillierung(state, features, types, weights):
+    """Bereich 4: Detaillierung zu Massnahmen und Verantwortlichkeiten je
+    Handlungsfeld sowie Terminierung ueber die groben Phasen. Ein zusammengelegtes
+    Handlungsfeld traegt genau eine Massnahme."""
+    zeilen = _uw_zeilen(state, features, types, weights)
+    if zeilen is None or not zeilen:
+        return
+    core.hf_phase_vorbelegen(state, zeilen)
+    st.header("Detaillierung und Terminierung")
+    st.caption("Legen Sie je Handlungsfeld eine konkrete Massnahme und eine "
+               "Verantwortlichkeit fest und ordnen Sie es einer Phase zu. Die Phase "
+               "ist aus dem Aufwand vorgeschlagen und frei anpassbar. Pruefen Sie "
+               "dabei Abhaengigkeiten zwischen den Handlungsfeldern.")
+    for z in zeilen:
+        k = core.hf_schluessel(z)
+        ks = _hf_key_str(k)
+        m = core.get_hf_massnahme(state, k)
+        einh = ", ".join(f"BE {u}" for u in z["einheiten"])
+        kopf = f"{z['merkmal']} → {z['soll']}  ({einh})"
+        if m["phase"]:
+            kopf += f"   ·   {m['phase']}. Phase"
+        with st.expander(kopf):
+            text = st.text_area(
+                "Massnahme", value=m["text"], key=f"{ks}_txt",
+                placeholder="Was ist konkret zu tun, um die Ziel-Auspraegung zu erreichen?",
+                height=80)
+            if text != m["text"]:
+                core.set_hf_massnahme(state, k, text=text)
+            sp_e, sp_w = st.columns(2)
+            with sp_e:
+                phasen = list(core.PHASEN)
+                aktuell = m["phase"] or core.PHASEN[-1]
+                wahl = st.selectbox(
+                    "Phase", options=phasen, index=phasen.index(aktuell),
+                    format_func=lambda p: f"{p}. Phase", key=f"{ks}_ph")
+                if wahl != m["phase"]:
+                    core.set_hf_massnahme(state, k, phase=wahl)
+            with sp_w:
+                wer = st.text_input("Verantwortlich", value=m["wer"], key=f"{ks}_wer")
+                if wer != m["wer"]:
+                    core.set_hf_massnahme(state, k, wer=wer)
+
+
 def seite_massnahmen(state, features, types, weights):
     st.title("Konfigurator — Massnahmenplanung")
 
@@ -1426,11 +1576,14 @@ def seite_massnahmen(state, features, types, weights):
         st.info("Keine Betrachtungseinheiten vorhanden.")
         return
 
-    st.caption("Aus dem Vergleich von Ist- und Soll-Auspraegung des Zieltyps ergeben "
-               "sich die Handlungsfelder. Das Werkzeug strukturiert sie, die "
-               "inhaltliche Ausgestaltung der Massnahmen erfolgt durch den Anwender.")
+    st.caption("Aus dem Vergleich von Ist- und Ziel-Auspraegung des Zieltyps ergeben "
+               "sich die Abweichungen je Einheit. Sie werden unternehmensweit zu "
+               "Handlungsfeldern zusammengefuehrt, priorisiert und zu Massnahmen "
+               "ausgestaltet. Die inhaltliche Ausgestaltung erfolgt durch den "
+               "Anwender.")
     st.divider()
 
+    # BEREICH 1: Abweichung vom Zieltyp je Einheit, reine Anzeige.
     for uid in state["units"]:
         typ = core.get_zieltyp(state, uid)
         st.header(f"Betrachtungseinheit {uid}")
@@ -1442,20 +1595,13 @@ def seite_massnahmen(state, features, types, weights):
 
         profil = types[typ]
         felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
-        core.phase_vorbelegen(state, uid, felder)
 
         if not felder:
-            st.success("Keine Handlungsfelder: Der Zieltyp ist im aktuellen Zustand "
+            st.success("Keine Abweichung: Der Zieltyp ist im aktuellen Zustand "
                        "bereits erreicht.")
         else:
-            st.subheader("Handlungsfelder")
-            _handlungsfeld_tabelle(felder)
-
-            st.subheader("Priorisierung")
-            _portfolio_matrix(felder)
-
-            st.subheader("Massnahmen")
-            _massnahmen_eingabe(state, uid, felder)
+            st.subheader("Abweichung vom Zieltyp")
+            _handlungsfeld_tabelle(state, uid, felder)
 
         nicht = core.nicht_erreichte_merkmale(state, uid, typ, profil, features)
         if nicht:
@@ -1465,6 +1611,22 @@ def seite_massnahmen(state, features, types, weights):
                 for m, grund in nicht:
                     st.markdown(f"- **{m}**: {grund}")
         st.divider()
+
+    # BEREICHE 2 bis 4: unternehmensweit. Priorisierung und Detaillierung erscheinen
+    # ab einer Einheit mit Zieltyp, die Harmonisierung erst ab zwei, da sich sonst
+    # nichts zusammenfuehren laesst.
+    mit_ziel = [u for u in state["units"] if core.get_zieltyp(state, u)]
+    if mit_ziel:
+        if len(mit_ziel) >= 2:
+            _harmonisierung(state, features, types, weights)
+            st.divider()
+        _priorisierung(state, features, types, weights)
+        st.divider()
+        _detaillierung(state, features, types, weights)
+        st.divider()
+    else:
+        st.info("Die Priorisierung und Detaillierung erscheinen, sobald mindestens "
+                "eine Betrachtungseinheit einen Zieltyp hat.")
 
     st.subheader("Ergebnis exportieren")
     st.download_button(
