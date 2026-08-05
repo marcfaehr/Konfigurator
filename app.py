@@ -53,11 +53,13 @@ def merkmal_tabelle(state, features, merkmal, weights):
     for i, uid in enumerate(state["units"]):
         spalte = kopf[i + 1]
         spalte.markdown(f"**{uid}**")
+        if core.get_name(state, uid) != uid:
+            spalte.caption(core.get_name(state, uid))
 
         if st.session_state.get("warte_bestaetigung") == uid:
             spalte.caption("⚠ loeschen?")
             if spalte.button("Loeschen", key=f"ok_{uid}_{merkmal}", type="tertiary",
-                             help=f"Einheit {uid} endgueltig loeschen", width="stretch"):
+                             help=f"{core.get_name(state, uid)} endgueltig loeschen", width="stretch"):
                 st.session_state.zu_loeschen = uid
                 st.rerun()
             if spalte.button("Abbrechen", key=f"no_{uid}_{merkmal}", type="tertiary",
@@ -65,7 +67,7 @@ def merkmal_tabelle(state, features, merkmal, weights):
                 st.session_state.pop("warte_bestaetigung", None)
                 st.rerun()
         else:
-            if spalte.button("🗑", key=f"del_{uid}_{merkmal}", help=f"Einheit {uid} loeschen"):
+            if spalte.button("🗑", key=f"del_{uid}_{merkmal}", help=f"{core.get_name(state, uid)} loeschen"):
                 st.session_state.warte_bestaetigung = uid
                 st.rerun()
 
@@ -91,6 +93,23 @@ def merkmal_tabelle(state, features, merkmal, weights):
                 core.set_choice(state, uid, merkmal, opt)
                 st.rerun()
         zeile[-1].write("")
+
+
+@st.dialog("Betrachtungseinheit umbenennen")
+def _umbenennen_dialog(state, uid):
+    """Modaler Dialog zum Umbenennen einer Einheit. Zeigt ein Textfeld mit dem
+    aktuellen Namen und speichert erst auf Bestaetigung. Die interne unit_id
+    (Buchstabe) bleibt unveraendert; nur der Anzeigename wird gesetzt."""
+    aktuell = state.get("namen", {}).get(uid, "")
+    neuer = st.text_input("Name der Betrachtungseinheit", value=aktuell,
+                          placeholder="z. B. Werk Nord")
+    st.caption(f"Interne Kennung bleibt: {uid}")
+    links, rechts = st.columns(2)
+    if links.button("Speichern", type="primary", width="stretch"):
+        core.set_name(state, uid, neuer)
+        st.rerun()
+    if rechts.button("Abbrechen", width="stretch"):
+        st.rerun()
 
 
 def erfassung_tabelle(state, features, merkmal, weights):
@@ -120,10 +139,10 @@ def erfassung_tabelle(state, features, merkmal, weights):
     for i, uid in enumerate(state["units"]):
         spalte = kopf[1 + i]
         if st.session_state.get("warte_bestaetigung") == uid:
-            spalte.markdown(f"**{uid}**  ⚠")
+            spalte.markdown(f"**{core.get_name(state, uid)}**  ⚠")
             c1, c2 = spalte.columns(2)
             if c1.button("Ja", key=f"ok_{uid}_{merkmal}", type="tertiary",
-                         help=f"Einheit {uid} endgueltig loeschen", width="stretch"):
+                         help=f"{core.get_name(state, uid)} endgueltig loeschen", width="stretch"):
                 st.session_state.zu_loeschen = uid
                 st.rerun()
             if c2.button("Nein", key=f"no_{uid}_{merkmal}", type="tertiary",
@@ -131,9 +150,13 @@ def erfassung_tabelle(state, features, merkmal, weights):
                 st.session_state.pop("warte_bestaetigung", None)
                 st.rerun()
         else:
-            titel, knopf = spalte.columns([3, 1])
-            titel.markdown(f"**{uid}**")
-            if knopf.button("🗑", key=f"del_{uid}_{merkmal}", help=f"Einheit {uid} loeschen"):
+            titel, k_ren, k_del = spalte.columns([2, 1, 1])
+            titel.markdown(f"**{core.get_name(state, uid)}**")
+            if k_ren.button("✏", key=f"ren_{uid}_{merkmal}",
+                            help=f"{core.get_name(state, uid)} umbenennen"):
+                _umbenennen_dialog(state, uid)
+            if k_del.button("🗑", key=f"del_{uid}_{merkmal}",
+                            help=f"{core.get_name(state, uid)} loeschen"):
                 st.session_state.warte_bestaetigung = uid
                 st.rerun()
 
@@ -332,7 +355,7 @@ def _sidebar_massnahmen(state):
 def _sidebar_erfassung(state, features):
     """Seitenleiste: Stand je Einheit + Auswertungsknopf."""
     with st.sidebar:
-        st.header("Vergleichsfall")
+        st.header("Fortschritt")
 
         if not state["units"]:
             st.caption("Noch keine Betrachtungseinheit angelegt.")
@@ -349,7 +372,7 @@ def _sidebar_erfassung(state, features):
             )
             offen = gesamt - versorgt
             st.progress(versorgt / gesamt,
-                        text=f"Einheit {uid}: {versorgt}/{gesamt} versorgt"
+                        text=f"{core.get_name(state, uid)}: {versorgt}/{gesamt} versorgt"
                              + ("  ✓" if offen == 0 else f"  ({offen} offen)"))
 
         st.caption("Bei *Ist unbekannt* ist keine Ist-Angabe noetig. Bei "
@@ -434,6 +457,8 @@ def potential_tabelle(state, features, merkmal):
     kopf[0].markdown("")
     for i, uid in enumerate(state["units"]):
         kopf[i + 1].markdown(f"**{uid}**")
+        if core.get_name(state, uid) != uid:
+            kopf[i + 1].caption(core.get_name(state, uid))
 
     # Dropdown-Optionen: intern "", "potential", "ausschluss";
     # angezeigt als leeres Feld, "Potential", "Ausschluss".
@@ -527,7 +552,7 @@ def seite_ergebnis_ist(state, features, types, weights):
         eind = core.eindeutigkeit(rang_ist)
         anteil = core.abdeckung_anteil(auswahl, features, weights)
 
-        st.header(f"Betrachtungseinheit {uid}")
+        st.header(core.get_name(state, uid))
 
         # Kopf-Kennzahlen: nur Ist.
         k1, k2, k3 = st.columns(3)
@@ -596,227 +621,267 @@ def seite_ergebnis_soll(state, features, types, weights):
         st.info("Keine Betrachtungseinheiten vorhanden.")
         return
 
-    for uid in state["units"]:
-        auswahl = state["matrix"][uid]
-        potential_unit = state["potential"][uid]
-        ausschluss_unit = state["ausschluss"][uid]
+    _tabs = st.tabs([core.get_name(state, uid) for uid in state["units"]])
+    for _tab, uid in zip(_tabs, state["units"]):
+        with _tab:
+            auswahl = state["matrix"][uid]
+            potential_unit = state["potential"][uid]
+            ausschluss_unit = state["ausschluss"][uid]
 
-        # Alle sechs Werte je Typ berechnen (Ist + Soll, je min/bereinigt/max).
-        werte = {}
-        for name, profil in types.items():
-            ist_min = core.uebereinstimmung(auswahl, profil, features, weights, ausschluss_unit)
-            ist_max = core.uebereinstimmung_max(auswahl, profil, features, weights, ausschluss_unit)
-            ist_ber = core.uebereinstimmung_beantwortet(auswahl, profil, features, weights, ausschluss_unit)
-            soll_min = core.uebereinstimmung_soll(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
-            soll_max = core.uebereinstimmung_soll_max(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
-            soll_ber = core.uebereinstimmung_soll_bereinigt(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
-            werte[name] = {
-                "ist_min": ist_min, "ist_max": ist_max, "ist_ber": ist_ber,
-                "soll_min": soll_min, "soll_max": soll_max, "soll_ber": soll_ber,
-            }
+            # Alle sechs Werte je Typ berechnen (Ist + Soll, je min/bereinigt/max).
+            werte = {}
+            for name, profil in types.items():
+                ist_min = core.uebereinstimmung(auswahl, profil, features, weights, ausschluss_unit)
+                ist_max = core.uebereinstimmung_max(auswahl, profil, features, weights, ausschluss_unit)
+                ist_ber = core.uebereinstimmung_beantwortet(auswahl, profil, features, weights, ausschluss_unit)
+                soll_min = core.uebereinstimmung_soll(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
+                soll_max = core.uebereinstimmung_soll_max(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
+                soll_ber = core.uebereinstimmung_soll_bereinigt(auswahl, potential_unit, profil, features, weights, ausschluss_unit)
+                werte[name] = {
+                    "ist_min": ist_min, "ist_max": ist_max, "ist_ber": ist_ber,
+                    "soll_min": soll_min, "soll_max": soll_max, "soll_ber": soll_ber,
+                }
 
-        # Rangfolge nach dem BEREINIGTEN Ist-Wert (faire Schaetzung).
-        # None (nichts beantwortet) ans Ende sortieren.
-        def sortkey(n):
-            b = werte[n]["ist_ber"]
-            return (b is not None, b if b is not None else 0)
-        typ_reihenfolge = sorted(types.keys(), key=sortkey, reverse=True)
-        best_name = typ_reihenfolge[0]
+            # Rangfolge nach dem BEREINIGTEN Ist-Wert (faire Schaetzung).
+            # None (nichts beantwortet) ans Ende sortieren.
+            def sortkey(n):
+                b = werte[n]["ist_ber"]
+                return (b is not None, b if b is not None else 0)
+            typ_reihenfolge = sorted(types.keys(), key=sortkey, reverse=True)
+            best_name = typ_reihenfolge[0]
 
-        # Eindeutigkeit auf Basis des bereinigten Ist-Werts (Abstand 1./2.).
-        ber_sorted = sorted(
-            [werte[n]["ist_ber"] or 0 for n in typ_reihenfolge], reverse=True)
-        eind_ist = (ber_sorted[0] - ber_sorted[1]) if len(ber_sorted) >= 2 else None
-        # Eindeutigkeit Potenzial (bereinigt).
-        ber_soll_sorted = sorted(
-            [werte[n]["soll_ber"] or 0 for n in typ_reihenfolge], reverse=True)
-        eind_soll = (ber_soll_sorted[0] - ber_soll_sorted[1]) if len(ber_soll_sorted) >= 2 else None
+            # Eindeutigkeit auf Basis des bereinigten Ist-Werts (Abstand 1./2.).
+            ber_sorted = sorted(
+                [werte[n]["ist_ber"] or 0 for n in typ_reihenfolge], reverse=True)
+            eind_ist = (ber_sorted[0] - ber_sorted[1]) if len(ber_sorted) >= 2 else None
+            # Eindeutigkeit Potenzial (bereinigt).
+            ber_soll_sorted = sorted(
+                [werte[n]["soll_ber"] or 0 for n in typ_reihenfolge], reverse=True)
+            eind_soll = (ber_soll_sorted[0] - ber_soll_sorted[1]) if len(ber_soll_sorted) >= 2 else None
 
-        anteil = core.abdeckung_anteil(auswahl, features, weights)
-        hv_best = core.harte_verstoesse(ausschluss_unit, types[best_name], features)
+            anteil = core.abdeckung_anteil(auswahl, features, weights)
+            hv_best = core.harte_verstoesse(ausschluss_unit, types[best_name], features)
 
-        st.header(f"Betrachtungseinheit {uid}")
 
-        # Bestpassender Typ getrennt fuer Ist und Potenzial (bereinigt).
-        # Bei Gleichstand werden ALLE Typen mit dem Hoechstwert genannt.
-        def _beste(schluessel):
-            vorhanden = [(n, werte[n][schluessel]) for n in typ_reihenfolge
-                         if werte[n][schluessel] is not None]
-            if not vorhanden:
-                return "—", None
-            max_wert = max(w for _, w in vorhanden)
-            namen = [n for n, w in vorhanden if abs(w - max_wert) < 1e-9]
-            return ", ".join(namen), max_wert
+            # Bestpassender Typ getrennt fuer Ist und Potenzial (bereinigt).
+            # Bei Gleichstand werden ALLE Typen mit dem Hoechstwert genannt.
+            def _beste(schluessel):
+                vorhanden = [(n, werte[n][schluessel]) for n in typ_reihenfolge
+                             if werte[n][schluessel] is not None]
+                if not vorhanden:
+                    return "—", None
+                max_wert = max(w for _, w in vorhanden)
+                namen = [n for n, w in vorhanden if abs(w - max_wert) < 1e-9]
+                return ", ".join(namen), max_wert
 
-        best_ist_namen, best_ist_wert = _beste("ist_ber")
-        best_pot_namen, best_pot_wert = _beste("soll_ber")
+            best_ist_namen, best_ist_wert = _beste("ist_ber")
+            best_pot_namen, best_pot_wert = _beste("soll_ber")
 
-        # Zeile 1: Ist
-        z1a, z1b = st.columns([2, 1])
-        z1a.metric("Bestpassender Typ (Ist, bereinigt)", best_ist_namen)
-        z1b.metric("Ist bereinigt",
-                   _fmt(best_ist_wert) if best_ist_wert is not None else "—")
-        # Zeile 2: Potenzial
-        z2a, z2b = st.columns([2, 1])
-        z2a.metric("Bestpassender Typ (Potenzial, bereinigt)", best_pot_namen)
-        z2b.metric("Potenzial bereinigt",
-                   _fmt(best_pot_wert) if best_pot_wert is not None else "—")
+            # Zeile 1: Ist
+            z1a, z1b = st.columns([2, 1])
+            z1a.metric("Bestpassender Typ (Ist, bereinigt)", best_ist_namen)
+            z1b.metric("Ist bereinigt",
+                       _fmt(best_ist_wert) if best_ist_wert is not None else "—")
+            # Zeile 2: Potenzial
+            z2a, z2b = st.columns([2, 1])
+            z2a.metric("Bestpassender Typ (Potenzial, bereinigt)", best_pot_namen)
+            z2b.metric("Potenzial bereinigt",
+                       _fmt(best_pot_wert) if best_pot_wert is not None else "—")
 
-        # --- Intervall-Diagramm: pro Typ Ist (blau) und Soll (orange) ---
-        st.subheader("Aehnlichkeit je Typ — Intervall (min bis max)")
-        st.caption("Balken = Spanne von Minimum bis Maximum · Strich = bereinigter "
-                   "Wert · blau = Ist · orange = Potenzial. Schmaler Balken = "
-                   "wenig offen, breiter Balken = viel offen.")
+            # --- Intervall-Diagramm: pro Typ Ist (blau) und Soll (orange) ---
+            st.subheader("Aehnlichkeit je Typ — Intervall (min bis max)")
+            st.caption("Balken = Spanne von Minimum bis Maximum · Strich = bereinigter "
+                       "Wert · blau = Ist · orange = Potenzial. Schmaler Balken = "
+                       "wenig offen, breiter Balken = viel offen.")
 
-        balken = []   # Intervall-Balken (min..max)
-        marker = []   # bereinigte Werte als Striche
-        for name in typ_reihenfolge:
-            w = werte[name]
-            balken.append({"Typ": name, "Art": "Ist",
-                           "min": w["ist_min"] * 100, "max": w["ist_max"] * 100})
-            balken.append({"Typ": name, "Art": "Potenzial",
-                           "min": w["soll_min"] * 100, "max": w["soll_max"] * 100})
-            if w["ist_ber"] is not None:
-                marker.append({"Typ": name, "Art": "Ist", "wert": w["ist_ber"] * 100})
-            if w["soll_ber"] is not None:
-                marker.append({"Typ": name, "Art": "Potenzial", "wert": w["soll_ber"] * 100})
-
-        df_balken = pd.DataFrame(balken)
-        df_marker = pd.DataFrame(marker)
-        farb_skala = alt.Scale(domain=["Ist", "Potenzial"], range=[FARBE_IST, FARBE_SOLL])
-
-        # Intervall-Balken als horizontale Bereiche, je Typ zwei Zeilen (Ist/Potenzial).
-        bars = (
-            alt.Chart(df_balken)
-            .mark_bar(height=12, cornerRadius=3)
-            .encode(
-                y=alt.Y("Typ:N", sort=typ_reihenfolge, title=None),
-                yOffset=alt.YOffset("Art:N", sort=["Ist", "Potenzial"]),
-                x=alt.X("min:Q", title="Aehnlichkeit (%)", scale=alt.Scale(domain=[0, 100])),
-                x2="max:Q",
-                color=alt.Color("Art:N", scale=farb_skala, title=None),
-                tooltip=["Typ", "Art",
-                         alt.Tooltip("min:Q", title="Minimum", format=".0f"),
-                         alt.Tooltip("max:Q", title="Maximum", format=".0f")],
-            )
-        )
-        # Bereinigte Werte als kurze senkrechte Striche (Tick).
-        ticks = (
-            alt.Chart(df_marker)
-            .mark_tick(thickness=2.5, size=16, color="#042C53")
-            .encode(
-                y=alt.Y("Typ:N", sort=typ_reihenfolge),
-                yOffset=alt.YOffset("Art:N", sort=["Ist", "Potenzial"]),
-                x=alt.X("wert:Q"),
-                tooltip=[alt.Tooltip("wert:Q", title="bereinigt", format=".0f")],
-            )
-        )
-        chart = (bars + ticks).properties(height=max(180, 60 * len(typ_reihenfolge)))
-        st.altair_chart(chart, use_container_width=True)
-
-        # --- Zahlen einklappbar darunter ---
-        with st.expander("Genaue Zahlen (alle drei Maße, Ist und Potenzial)", expanded=False):
-            zeilen = []
+            balken = []   # Intervall-Balken (min..max)
+            marker = []   # bereinigte Werte als Striche
             for name in typ_reihenfolge:
                 w = werte[name]
-                hv = core.harte_verstoesse(ausschluss_unit, types[name], features)
-                zeilen.append({
-                    "Typ": name,
-                    "Ist min": _fmt(w["ist_min"]),
-                    "Ist berein.": _fmt(w["ist_ber"]),
-                    "Ist max": _fmt(w["ist_max"]),
-                    "Potenzial min": _fmt(w["soll_min"]),
-                    "Potenzial berein.": _fmt(w["soll_ber"]),
-                    "Potenzial max": _fmt(w["soll_max"]),
-                    "harte V.": hv,
-                })
-            st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+                balken.append({"Typ": name, "Art": "Ist",
+                               "min": w["ist_min"] * 100, "max": w["ist_max"] * 100})
+                balken.append({"Typ": name, "Art": "Potenzial",
+                               "min": w["soll_min"] * 100, "max": w["soll_max"] * 100})
+                if w["ist_ber"] is not None:
+                    marker.append({"Typ": name, "Art": "Ist", "wert": w["ist_ber"] * 100})
+                if w["soll_ber"] is not None:
+                    marker.append({"Typ": name, "Art": "Potenzial", "wert": w["soll_ber"] * 100})
 
-        # --- Guete-Kennzahlen ---
-        st.subheader("Guete der Aussage")
-        g1, g2, g3 = st.columns(3)
-        g1.metric("Abdeckung (Ist)", _fmt(anteil),
-                  help="Gewichteter Anteil der Merkmale mit Ist-Angabe.")
-        g2.metric("Eindeutigkeit (Ist)", _fmt(eind_ist),
-                  help="Abstand bester zu zweitbester Typ, bereinigter Ist-Wert.")
-        g3.metric("Eindeutigkeit (Potenzial)", _fmt(eind_soll),
-                  help="Abstand bester zu zweitbester Typ, bereinigter Potenzial-Wert.")
+            df_balken = pd.DataFrame(balken)
+            df_marker = pd.DataFrame(marker)
+            farb_skala = alt.Scale(domain=["Ist", "Potenzial"], range=[FARBE_IST, FARBE_SOLL])
 
-        # Fuer den hinteren (unveraenderten) Teil benoetigte Groessen bereitstellen.
-        rang_ist = [(n, werte[n]["ist_min"]) for n in typ_reihenfolge]
-        soll_map = {n: (werte[n]["soll_ber"] if werte[n]["soll_ber"] is not None
-                        else werte[n]["soll_min"]) for n in typ_reihenfolge}
+            # Intervall-Balken als horizontale Bereiche, je Typ zwei Zeilen (Ist/Potenzial).
+            bars = (
+                alt.Chart(df_balken)
+                .mark_bar(height=12, cornerRadius=3)
+                .encode(
+                    y=alt.Y("Typ:N", sort=typ_reihenfolge, title=None),
+                    yOffset=alt.YOffset("Art:N", sort=["Ist", "Potenzial"]),
+                    x=alt.X("min:Q", title="Aehnlichkeit (%)", scale=alt.Scale(domain=[0, 100])),
+                    x2="max:Q",
+                    color=alt.Color("Art:N", scale=farb_skala, title=None),
+                    tooltip=["Typ", "Art",
+                             alt.Tooltip("min:Q", title="Minimum", format=".0f"),
+                             alt.Tooltip("max:Q", title="Maximum", format=".0f")],
+                )
+            )
+            # Bereinigte Werte als kurze senkrechte Striche (Tick).
+            ticks = (
+                alt.Chart(df_marker)
+                .mark_tick(thickness=2.5, size=16, color="#042C53")
+                .encode(
+                    y=alt.Y("Typ:N", sort=typ_reihenfolge),
+                    yOffset=alt.YOffset("Art:N", sort=["Ist", "Potenzial"]),
+                    x=alt.X("wert:Q"),
+                    tooltip=[alt.Tooltip("wert:Q", title="bereinigt", format=".0f")],
+                )
+            )
+            chart = (bars + ticks).properties(height=max(180, 60 * len(typ_reihenfolge)))
+            st.altair_chart(chart, use_container_width=True)
 
-        hinweise = []
-        if anteil < 1.0:
-            hinweise.append("Diese Einheit hat Merkmale ohne Ist-Angabe; deshalb "
-                            "spannen die Ist-Balken ein Intervall auf.")
-        if hv_best > 0:
-            hinweise.append(f"Achtung: {hv_best} Merkmal(e) koennen den Typ {best_name} "
-                            "strukturell nie erreichen (harte Verstoesse durch Ausschluss).")
-        for h in hinweise:
-            st.caption(h)
-
-        # --- Merkmals-Status je Typ (einklappbar, standardmaessig zu) ---
-        st.subheader("Merkmals-Vergleichsfall je Typ")
-        st.caption("Aufklappen, um pro Typ zu sehen, welche Merkmale im Ist passen, "
-                   "über Potenzial erreichbar sind, im Ist nicht passen, noch offen "
-                   "oder blockiert sind.")
-        for name, _ in rang_ist:
-            ist_kpi = dict(rang_ist)[name]
-            soll_kpi = soll_map[name]
-            titel = (f"{name}   ·   Ist {_fmt(ist_kpi)} / Potenzial {_fmt(soll_kpi)}")
-            with st.expander(titel, expanded=False):
-                zeilen_status = []
-                for m in features:
-                    status = core.merkmal_status(
-                        auswahl, potential_unit, ausschluss_unit, types[name], m)
-                    symbol, klartext = _status_anzeige(status)
-                    zeilen_status.append({
-                        "Merkmal": m,
-                        "Vergleichsfall": f"{symbol} {klartext}",
+            # --- Zahlen einklappbar darunter ---
+            with st.expander("Genaue Zahlen (alle drei Maße, Ist und Potenzial)", expanded=False):
+                zeilen = []
+                for name in typ_reihenfolge:
+                    w = werte[name]
+                    hv = core.harte_verstoesse(ausschluss_unit, types[name], features)
+                    zeilen.append({
+                        "Typ": name,
+                        "Ist min": _fmt(w["ist_min"]),
+                        "Ist berein.": _fmt(w["ist_ber"]),
+                        "Ist max": _fmt(w["ist_max"]),
+                        "Potenzial min": _fmt(w["soll_min"]),
+                        "Potenzial berein.": _fmt(w["soll_ber"]),
+                        "Potenzial max": _fmt(w["soll_max"]),
+                        "harte V.": hv,
                     })
-                st.dataframe(pd.DataFrame(zeilen_status), hide_index=True, width="stretch")
+                st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
 
-        # --- Engere Auswahl fuer die Detaillierung (bis zu 3 Typen) ---
-        st.subheader("Engere Auswahl")
-        typ_namen = [n for n, _ in rang_ist]
-        aktuelle_auswahl = core.get_engere_auswahl(state, uid)
-        wahl = st.multiselect(
-            f"Typen für Betrachtungseinheit {uid} "
-            "(werden anschliessend ausgestaltet und verglichen)",
-            options=typ_namen,
-            default=[t for t in aktuelle_auswahl if t in typ_namen],
-            key=f"engere_auswahl_{uid}",
-            help="Je mehr Typen gewaehlt sind, desto aufwaendiger wird die "
-                 "Zieltypbestimmung, da dort jedes Merkmal je Typ einzeln zu "
-                 "entscheiden ist. Eine feste Obergrenze gibt es bewusst nicht.",
-        )
-        if wahl != aktuelle_auswahl:
-            # Differenz anwenden: neue aufnehmen (legt Soll an), entfernte loeschen
-            # (raeumt Soll und ggf. finalen Zieltyp auf).
-            for t in wahl:
-                if t not in aktuelle_auswahl:
-                    core.add_to_engere_auswahl(state, uid, t)
-            for t in list(aktuelle_auswahl):
-                if t not in wahl:
-                    core.remove_from_engere_auswahl(state, uid, t)
-            st.rerun()
+            # --- Guete-Kennzahlen ---
+            st.subheader("Guete der Aussage")
+            g1, g2, g3 = st.columns(3)
+            g1.metric("Abdeckung (Ist)", _fmt(anteil),
+                      help="Gewichteter Anteil der Merkmale mit Ist-Angabe.")
+            g2.metric("Eindeutigkeit (Ist)", _fmt(eind_ist),
+                      help="Abstand bester zu zweitbester Typ, bereinigter Ist-Wert.")
+            g3.metric("Eindeutigkeit (Potenzial)", _fmt(eind_soll),
+                      help="Abstand bester zu zweitbester Typ, bereinigter Potenzial-Wert.")
 
-        if not wahl:
-            st.caption("Noch keine Typen ausgewaehlt. Waehle die Typen, die du in der "
-                       "Zieltypbestimmung ausgestalten und im Typvergleich vergleichen moechtest.")
-        else:
-            # Kurze Rueckmeldung je gewaehltem Typ, harte Verstoesse als Warnsignal.
-            teile = []
-            for t in wahl:
-                hv = core.harte_verstoesse(ausschluss_unit, types[t], features)
-                marke = f" ⛔{hv}" if hv > 0 else ""
-                teile.append(f"**{t}** (Potenzial {_fmt(soll_map[t])}{marke})")
-            st.caption("In der engeren Auswahl: " + " · ".join(teile)
-                       + ". Der finale Zieltyp wird im Typvergleich festgelegt.")
+            # Fuer den hinteren (unveraenderten) Teil benoetigte Groessen bereitstellen.
+            rang_ist = [(n, werte[n]["ist_min"]) for n in typ_reihenfolge]
+            soll_map = {n: (werte[n]["soll_ber"] if werte[n]["soll_ber"] is not None
+                            else werte[n]["soll_min"]) for n in typ_reihenfolge}
 
-        st.divider()
+            hinweise = []
+            if anteil < 1.0:
+                hinweise.append("Diese Einheit hat Merkmale ohne Ist-Angabe; deshalb "
+                                "spannen die Ist-Balken ein Intervall auf.")
+            if hv_best > 0:
+                hinweise.append(f"Achtung: {hv_best} Merkmal(e) koennen den Typ {best_name} "
+                                "strukturell nie erreichen (harte Verstoesse durch Ausschluss).")
+            for h in hinweise:
+                st.caption(h)
+
+            # --- Merkmals-Status je Typ (einklappbar, standardmaessig zu) ---
+            st.subheader("Merkmals-Vergleichsfall je Typ")
+            st.caption("Aufklappen, um pro Typ zu sehen, welche Merkmale im Ist passen, "
+                       "über Potenzial erreichbar sind, im Ist nicht passen, noch offen "
+                       "oder blockiert sind.")
+            for name, _ in rang_ist:
+                ist_kpi = dict(rang_ist)[name]
+                soll_kpi = soll_map[name]
+                titel = (f"{name}   ·   Ist {_fmt(ist_kpi)} / Potenzial {_fmt(soll_kpi)}")
+                with st.expander(titel, expanded=False):
+                    zeilen_status = []
+                    for m in features:
+                        status = core.merkmal_status(
+                            auswahl, potential_unit, ausschluss_unit, types[name], m)
+                        symbol, klartext = _status_anzeige(status)
+                        zeilen_status.append({
+                            "Merkmal": m,
+                            "Vergleichsfall": f"{symbol} {klartext}",
+                        })
+                    st.dataframe(pd.DataFrame(zeilen_status), hide_index=True, width="stretch")
+
+            # --- Engere Auswahl fuer die Detaillierung (bis zu 3 Typen) ---
+            st.subheader("Engere Auswahl")
+            typ_namen = [n for n, _ in rang_ist]
+            aktuelle_auswahl = core.get_engere_auswahl(state, uid)
+            wahl = st.multiselect(
+                f"Typen für Betrachtungseinheit {uid} "
+                "(werden anschliessend ausgestaltet und verglichen)",
+                options=typ_namen,
+                default=[t for t in aktuelle_auswahl if t in typ_namen],
+                key=f"engere_auswahl_{uid}",
+                help="Je mehr Typen gewaehlt sind, desto aufwaendiger wird die "
+                     "Zieltypbestimmung, da dort jedes Merkmal je Typ einzeln zu "
+                     "entscheiden ist. Eine feste Obergrenze gibt es bewusst nicht.",
+            )
+            if wahl != aktuelle_auswahl:
+                # Differenz anwenden: neue aufnehmen (legt Soll an), entfernte loeschen
+                # (raeumt Soll und ggf. finalen Zieltyp auf).
+                for t in wahl:
+                    if t not in aktuelle_auswahl:
+                        core.add_to_engere_auswahl(state, uid, t)
+                for t in list(aktuelle_auswahl):
+                    if t not in wahl:
+                        core.remove_from_engere_auswahl(state, uid, t)
+                st.rerun()
+
+            if not wahl:
+                st.caption("Noch keine Typen ausgewaehlt. Waehle die Typen, die du in der "
+                           "Zieltypbestimmung ausgestalten und im Typvergleich vergleichen moechtest.")
+            else:
+                # Kurze Rueckmeldung je gewaehltem Typ, harte Verstoesse als Warnsignal.
+                teile = []
+                for t in wahl:
+                    hv = core.harte_verstoesse(ausschluss_unit, types[t], features)
+                    marke = f" ⛔{hv}" if hv > 0 else ""
+                    teile.append(f"**{t}** (Potenzial {_fmt(soll_map[t])}{marke})")
+                st.caption("In der engeren Auswahl: " + " · ".join(teile)
+                           + ". Der finale Zieltyp wird im Typvergleich festgelegt.")
+
+            st.divider()
+
+
+@st.dialog("Aufwand und Kosten angeben")
+def _aufwand_dialog(state, uid, typ, merkmal, ziel_opt, im_profil):
+    """Modal beim Waehlen einer Ziel-Auspraegung, die vom Ist abweicht.
+    Der Aufwand ist Pflicht, die Kosten sind optional. Die Ziel-Auspraegung
+    wird erst beim Speichern uebernommen; Abbrechen laesst alles unveraendert."""
+    st.markdown(f"**{merkmal}**")
+    st.markdown(f"Ziel-Auspraegung: **{ziel_opt}**")
+    if not im_profil:
+        st.info("Diese Auspraegung liegt ausserhalb des Profils. Sie erhoeht "
+                "die Aehnlichkeit zum Zieltyp nicht. Der Aufwand wird dennoch "
+                "erfasst und steht fuer die spaetere Massnahmenplanung bereit.")
+    stufen = list(core.AUFWAND_STUFEN)
+    aktueller = core.get_aufwand(state, uid, typ, merkmal)
+    vor = stufen.index(aktueller) if aktueller in stufen else None
+    stufe = st.radio("Aufwand (Pflicht)", stufen,
+                     format_func=lambda x: core.AUFWAND_LABEL[x],
+                     index=vor, horizontal=True)
+    kosten = st.number_input("Kosten in Euro (optional)", min_value=0.0,
+                             value=core.get_kosten(state, uid, typ, merkmal),
+                             step=1000.0, format="%.0f",
+                             help="Leer lassen, wenn nicht bezifferbar.")
+    dauer = st.number_input("Dauer in Wochen (optional)", min_value=0.0,
+                            value=core.get_dauer(state, uid, typ, merkmal),
+                            step=1.0, format="%.0f",
+                            help="Leer lassen, wenn nicht abschaetzbar.")
+    sp1, sp2 = st.columns(2)
+    if sp1.button("Speichern", type="primary", width="stretch",
+                  disabled=(stufe is None)):
+        core.set_soll(state, uid, typ, merkmal, ziel_opt)
+        core.set_aufwand(state, uid, typ, merkmal, stufe)
+        core.set_kosten(state, uid, typ, merkmal, kosten)
+        core.set_dauer(state, uid, typ, merkmal, dauer)
+        st.rerun()
+    if sp2.button("Abbrechen", width="stretch"):
+        st.rerun()
+    if stufe is None:
+        st.caption("Bitte eine Aufwandsstufe waehlen, um zu speichern.")
 
 
 def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
@@ -851,12 +916,13 @@ def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
 
     st.markdown(f"**{merkmal}**")
 
-    breiten = [1, 6, 3, 3]
+    breiten = [1, 5, 3, 2, 3]
     kopf = st.columns(breiten)
-    kopf[0].caption("Ziel")
+    kopf[0].caption("Profil")
     kopf[1].caption("Auspraegung")
     kopf[2].caption("deine Angabe")
     kopf[3].caption("Ziel")
+    kopf[4].caption("Aufwand & Kosten")
 
     for opt in optionen:
         z = st.columns(breiten)
@@ -881,23 +947,33 @@ def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
         else:
             z[2].markdown("&nbsp;", unsafe_allow_html=True)
 
-        # Spalte 4: Soll-Auspraegung.
+        # Spalte 4: Ziel-Auspraegung (Knopf oeffnet das Aufwand-Pop-up).
         _detail_soll_spalte(state, uid, typ, merkmal, opt, status, soll_wert,
-                            ist_wert, kandidaten, z[3])
+                            ist_wert, kandidaten, profil, z[3])
+
+        # Spalte 5: Aufwand & Kosten der gewaehlten, vom Ist abweichenden Ziel-
+        # Auspraegung. Bei Ist=Ziel oder 'nichts anstreben' bleibt sie leer.
+        if (opt == soll_wert and opt != ist_wert
+                and soll_wert not in (core.OFFEN, core.NICHTS_ANSTREBEN)):
+            aufw = core.get_aufwand(state, uid, typ, merkmal)
+            kost = core.get_kosten(state, uid, typ, merkmal)
+            teile = []
+            teile.append(core.AUFWAND_LABEL[aufw] if aufw in core.AUFWAND_LABEL
+                         else "⚠️ offen")
+            if kost is not None:
+                teile.append(f"{kost:,.0f} €".replace(",", "."))
+            z[4].markdown("  ·  ".join(teile))
+        else:
+            z[4].markdown("&nbsp;", unsafe_allow_html=True)
 
     # In Fall 4 & 5: zusaetzlich der Knopf 'nichts anstreben'.
     soll_final = core.get_soll(state, uid, typ, merkmal)
     if ist_unbekannt_fall:
         _nichts_anstreben_knopf(state, uid, typ, merkmal, soll_final)
 
-    # Aufwand ist Pflicht, sobald eine echte Auspraegung angestrebt ist, die vom
-    # Ist abweicht. Bei belassenem Ist oder 'nichts anstreben' entfaellt er.
-    if soll_final not in (core.OFFEN, core.NICHTS_ANSTREBEN) and soll_final != ist_wert:
-        _aufwand_auswahl(state, uid, typ, merkmal, soll_final)
-
 
 def _detail_soll_spalte(state, uid, typ, merkmal, opt, status, soll_wert,
-                        ist_wert, kandidaten, spalte):
+                        ist_wert, kandidaten, profil, spalte):
     """Rechte Spalte (angestrebt) einer Auspraegungszeile. Fall 1: kein Knopf,
     das Ist ist angestrebt. Sonst: Knopf nur fuer Kandidaten. Ausgeschlossene
     Auspraegungen koennen (in Fall 4/5) gewaehlt werden, ohne den Ausschluss in
@@ -913,40 +989,27 @@ def _detail_soll_spalte(state, uid, typ, merkmal, opt, status, soll_wert,
         spalte.markdown("&nbsp;", unsafe_allow_html=True)
         return
 
-    _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, spalte)
+    _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, ist_wert, profil, spalte)
 
 
-def _aufwand_auswahl(state, uid, typ, merkmal, soll_wert):
-    """Pflicht-Aufwandsabfrage (gering/mittel/hoch) fuer ein Merkmal mit
-    gewaehltem Ziel, das vom Ist abweicht. Der Wert misst, wie aufwaendig es ist,
-    das Merkmal vom heutigen Zustand in die Ziel-Auspraegung zu bringen."""
-    aktuell = core.get_aufwand(state, uid, typ, merkmal)
-    sp = st.columns([3, 2, 2, 2])
-    if aktuell is None:
-        sp[0].markdown(f"⚠️ **Aufwand für „{soll_wert}“** (Pflicht)")
-    else:
-        sp[0].markdown(f"Aufwand für „{soll_wert}“")
-    for i, stufe in enumerate(core.AUFWAND_STUFEN):
-        aktiv = (aktuell == stufe)
-        if sp[i + 1].button(core.AUFWAND_LABEL[stufe],
-                            key=f"aufw_{uid}_{typ}_{merkmal}_{stufe}",
-                            type="primary" if aktiv else "secondary",
-                            width="stretch"):
-            core.set_aufwand(state, uid, typ, merkmal, stufe)
-            st.rerun()
-
-
-def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, spalte):
+def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, ist_wert, profil, spalte):
     """Wahl-Knopf fuer die Ziel-Auspraegung, fuer EINEN Typ. Kein Toggle:
-    die aktive Auspraegung ist ein Marker, inaktive sind waehlbare Knoepfe. Der
-    Key enthaelt den Typ, damit Knoepfe verschiedener Tabs nicht kollidieren."""
+    die aktive Auspraegung ist ein Marker, inaktive sind waehlbare Knoepfe.
+    Weicht die gewaehlte Auspraegung vom Ist ab, oeffnet der Klick das Aufwand-
+    Pop-up (Pflicht-Stufe, optionale Kosten). Ist die gewaehlte Auspraegung das
+    Ist selbst, wird ohne Pop-up uebernommen, da keine Veraenderung anfaellt."""
     if opt == soll_wert:
         spalte.markdown("● **Ziel**")
     else:
         if spalte.button("○ waehlen", key=f"soll_{uid}_{typ}_{merkmal}_{opt}",
                          type="secondary", width="stretch"):
-            core.set_soll(state, uid, typ, merkmal, opt)
-            st.rerun()
+            if opt == ist_wert:
+                core.set_soll(state, uid, typ, merkmal, opt)
+                core.set_aufwand(state, uid, typ, merkmal, None)
+                core.set_kosten(state, uid, typ, merkmal, None)
+                st.rerun()
+            else:
+                _aufwand_dialog(state, uid, typ, merkmal, opt, opt in profil)
 
 
 def _nichts_anstreben_knopf(state, uid, typ, merkmal, soll_wert):
@@ -1048,22 +1111,23 @@ def seite_detaillierung(state, features, types, weights):
                    "vergleichenden Typen im Potenzial-Ergebnis aus.")
 
     st.divider()
-    for uid in state["units"]:
-        st.header(f"Betrachtungseinheit {uid}")
-        auswahl = core.get_engere_auswahl(state, uid)
-        if not auswahl:
-            st.caption("Keine Typen in der engeren Auswahl — uebersprungen.")
+    _tabs = st.tabs([core.get_name(state, uid) for uid in state["units"]])
+    for _tab, uid in zip(_tabs, state["units"]):
+        with _tab:
+            auswahl = core.get_engere_auswahl(state, uid)
+            if not auswahl:
+                st.caption("Keine Typen in der engeren Auswahl — uebersprungen.")
+                st.divider()
+                continue
+
+            final = core.get_zieltyp(state, uid)
+            # Ein Tab je Typ der engeren Auswahl; der finale Zieltyp ist markiert.
+            tab_titel = [(f"⭐ {t}" if t == final else t) for t in auswahl]
+            for tab, typ in zip(st.tabs(tab_titel), auswahl):
+                with tab:
+                    _detail_tab_inhalt(state, features, types, uid, typ)
+
             st.divider()
-            continue
-
-        final = core.get_zieltyp(state, uid)
-        # Ein Tab je Typ der engeren Auswahl; der finale Zieltyp ist markiert.
-        tab_titel = [(f"⭐ {t}" if t == final else t) for t in auswahl]
-        for tab, typ in zip(st.tabs(tab_titel), auswahl):
-            with tab:
-                _detail_tab_inhalt(state, features, types, uid, typ)
-
-        st.divider()
 
 def _stufendiagramm(state, features, types, weights, uid, auswahl):
     """Treppendiagramm je Betrachtungseinheit: erreichbare Aehnlichkeit ueber die
@@ -1078,8 +1142,16 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
     for typ in auswahl:
         score = core.soll_score_gestaffelt(state, uid, typ, types[typ],
                                            features, weights)
+        felder = core.handlungsfelder(state, uid, typ, types[typ],
+                                      features, weights)
+        neu_je_stufe = {k: [] for k in core.AUFWAND_STUFEN_K}
+        for f in felder:
+            st_k = (f["aufwand"] if f["aufwand"] in core.AUFWAND_STUFEN
+                    else core.AUFWAND_HOCH)
+            neu_je_stufe[st_k].append(f["merkmal"])
         for k in core.AUFWAND_STUFEN_K:
-            zeilen.append({"stufe": k, "aehnlichkeit": score[k], "typ": typ})
+            zeilen.append({"stufe": k, "aehnlichkeit": score[k], "typ": typ,
+                           "neu": ", ".join(neu_je_stufe[k]) or "—"})
     df = pd.DataFrame(zeilen)
 
     try:
@@ -1091,7 +1163,10 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
                 x=alt.X("stufe:Q",
                         scale=alt.Scale(domain=[0, 3], nice=False),
                         axis=alt.Axis(values=[0, 1, 2, 3],
-                                      title="Aufwandsstufe k")),
+                                      labelExpr="datum.value == 0 ? 'ohne' : "
+                                                "datum.value == 1 ? 'gering' : "
+                                                "datum.value == 2 ? 'mittel' : 'hoch'",
+                                      title="Aufwand")),
                 y=alt.Y("aehnlichkeit:Q",
                         scale=alt.Scale(domain=[0, 1]),
                         axis=alt.Axis(format="%",
@@ -1099,6 +1174,7 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
                 color=alt.Color("typ:N", title="Typ"),
                 tooltip=[alt.Tooltip("typ:N", title="Typ"),
                          alt.Tooltip("stufe:Q", title="Stufe k"),
+                         alt.Tooltip("neu:N", title="ab dieser Stufe neu"),
                          alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
                                      format=".0%")],
             )
@@ -1118,6 +1194,221 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
                "können daher nicht fallen.")
 
 
+def _budgetdiagramm(state, features, types, weights, uid, auswahl):
+    """Budgetkurve je Betrachtungseinheit: erreichbare Ziel-Aehnlichkeit ueber dem
+    kumulierten Budget, ein Treppen-Verlauf je Typ der engeren Auswahl. Grundlage
+    sind die Handlungsfelder mit erfassten Kosten. Handlungsfelder ohne Kosten
+    erscheinen nicht in der Kurve, sondern werden darunter je Typ als noch nicht
+    bezifferbar ausgewiesen; sie deckeln die planbare Kurve."""
+    import pandas as pd
+
+    zeilen, infos, hat_kurve = [], [], False
+    for typ in auswahl:
+        bk = core.budgetkurve(state, uid, typ, types[typ], features, weights)
+        for budget, aehn, merkmal in bk["punkte"]:
+            zeilen.append({"budget": budget, "aehnlichkeit": aehn, "typ": typ,
+                           "merkmal": merkmal or ""})
+        if len(bk["punkte"]) > 1:
+            hat_kurve = True
+        infos.append((typ, bk))
+
+    if not hat_kurve:
+        st.caption("Noch keine Kosten erfasst. Trage in der Zieltypbestimmung "
+                   "Kosten je Aenderung ein, damit die Budgetkurve entsteht.")
+        return
+
+    df = pd.DataFrame(zeilen)
+    try:
+        import altair as alt
+        grund = alt.Chart(df).encode(
+            x=alt.X("budget:Q",
+                    scale=alt.Scale(domainMin=0, nice=False),
+                    axis=alt.Axis(title="Budget (Euro)", format="~s")),
+            y=alt.Y("aehnlichkeit:Q",
+                    scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format="%", title="erreichbare Ähnlichkeit")),
+            color=alt.Color("typ:N", title="Typ"),
+        )
+        linie = grund.mark_line(interpolate="step-after", point=True,
+                                strokeWidth=2).encode(
+            tooltip=[alt.Tooltip("typ:N", title="Typ"),
+                     alt.Tooltip("merkmal:N", title="Merkmal (Sprung)"),
+                     alt.Tooltip("budget:Q", title="Budget", format=",.0f"),
+                     alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
+                                 format=".0%")])
+        # Beschriftung: je Sprung das ausloesende Merkmal (Basispunkt ohne Label).
+        labels = (grund.transform_filter("datum.merkmal != ''")
+                  .mark_text(align="left", dx=6, dy=-7, fontSize=10)
+                  .encode(text="merkmal:N"))
+        diagramm = (linie + labels).properties(height=340)
+        try:
+            st.altair_chart(diagramm, width="stretch")
+        except TypeError:
+            st.altair_chart(diagramm, use_container_width=True)
+    except Exception:
+        st.line_chart(df.pivot(index="budget", columns="typ",
+                               values="aehnlichkeit"))
+
+    for typ, bk in infos:
+        if bk["unbeziffert"]:
+            namen = ", ".join(f["merkmal"] for f in bk["unbeziffert"])
+            st.caption(
+                f"{typ}: {len(bk['unbeziffert'])} Merkmal(e) ohne Kostenschätzung "
+                f"({namen}). Die planbare Kurve deckelt bei "
+                f"{bk['deckel'] * 100:.0f} %, mit diesen Aenderungen waeren bis zu "
+                f"{bk['max_gesamt'] * 100:.0f} % erreichbar.")
+
+    st.caption("Budget 0 ist die ohne jede Änderung erreichte Übereinstimmung. "
+               "Jede Stufe fügt das Merkmal mit dem höchsten "
+               "Ähnlichkeitsgewinn je Euro hinzu, die Verläufe können daher "
+               "nicht fallen.")
+
+
+def _dauer_diagramm(state, features, types, weights, uid, auswahl):
+    """Dauer je Aenderung als Balken, die alle bei null beginnen. Das entspricht
+    der parallelen Sicht: laufen die Aenderungen gleichzeitig, bestimmt die
+    laengste Dauer die Gesamtdauer. Ein Balken je Merkmal und Typ."""
+    import pandas as pd
+    zeilen = []
+    for typ in auswahl:
+        for f in core.handlungsfelder(state, uid, typ, types[typ],
+                                      features, weights):
+            d = core.get_dauer(state, uid, typ, f["merkmal"])
+            if d is not None:
+                zeilen.append({"merkmal": f["merkmal"], "typ": typ, "dauer": d,
+                               "label": f"{f['merkmal']} · {typ}"})
+    if not zeilen:
+        st.caption("Sobald Dauern erfasst sind, erscheint hier je Änderung ein "
+                   "Balken, der bei null beginnt.")
+        return
+    df = pd.DataFrame(zeilen)
+    try:
+        import altair as alt
+        chart = (alt.Chart(df).mark_bar().encode(
+            x=alt.X("dauer:Q", scale=alt.Scale(domainMin=0, nice=False),
+                    axis=alt.Axis(title="Dauer (Wochen)")),
+            y=alt.Y("label:N", sort="-x", title=None),
+            color=alt.Color("typ:N", title="Typ"),
+            tooltip=[alt.Tooltip("merkmal:N", title="Merkmal"),
+                     alt.Tooltip("typ:N", title="Typ"),
+                     alt.Tooltip("dauer:Q", title="Dauer (Wochen)")])
+            .properties(height=40 + 26 * len(df)))
+        try:
+            st.altair_chart(chart, width="stretch")
+        except TypeError:
+            st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        st.bar_chart(df.set_index("label")["dauer"])
+    st.caption("Jeder Balken beginnt bei null. Laufen die Änderungen parallel, "
+               "bestimmt die längste Dauer die Gesamtdauer.")
+
+
+def _budget_loeser(state, features, types, weights, uid, auswahl):
+    """Budget-Loeser: der Anwender gibt ein Budget ein, das Werkzeug bestimmt je
+    Typ die unter diesem Budget beste erreichbare Aehnlichkeit (exaktes Optimum,
+    Rucksack) und zeigt sie als Balken. Der beste Typ und die je Typ enthaltenen
+    Merkmale werden benannt. Anders als die Budgetkurve, die gierig ordnet, ist
+    dies das echte Optimum fuer den eingegebenen Budgetwert."""
+    import pandas as pd
+    hat = any(core.get_kosten(state, uid, typ, f["merkmal"]) is not None
+              for typ in auswahl
+              for f in core.handlungsfelder(state, uid, typ, types[typ],
+                                            features, weights))
+    if not hat:
+        st.caption("Sobald Kosten erfasst sind, laesst sich hier zu einem Budget "
+                   "der beste Typ bestimmen.")
+        return
+
+    budget = st.number_input("Verfügbares Budget in Euro", min_value=0.0,
+                             value=50000.0, step=10000.0, format="%.0f",
+                             key=f"budget_{uid}")
+
+    zeilen, details = [], []
+    for typ in auswahl:
+        opt = core.budget_optimum(state, uid, typ, types[typ], features,
+                                  weights, budget)
+        zeilen.append({"typ": typ, "aehnlichkeit": opt["aehnlichkeit"]})
+        details.append((typ, opt))
+    df = pd.DataFrame(zeilen)
+    bester = max(details, key=lambda td: td[1]["aehnlichkeit"])[0]
+    bester_wert = max(td[1]["aehnlichkeit"] for td in details)
+
+    try:
+        import altair as alt
+        chart = (alt.Chart(df).mark_bar().encode(
+            x=alt.X("aehnlichkeit:Q", scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format="%", title="erreichbare Ähnlichkeit")),
+            y=alt.Y("typ:N", sort="-x", title="Typ"),
+            color=alt.condition(alt.datum.typ == bester,
+                                alt.value("#2a78d6"), alt.value("#b8c4d0")),
+            tooltip=[alt.Tooltip("typ:N", title="Typ"),
+                     alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
+                                 format=".0%")])
+            .properties(height=60 + 42 * len(df)))
+        try:
+            st.altair_chart(chart, width="stretch")
+        except TypeError:
+            st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        st.bar_chart(df.set_index("typ"))
+
+    st.markdown(f"Bester Typ bei diesem Budget: **{bester}** "
+                f"({bester_wert * 100:.0f} % Ähnlichkeit).")
+    st.markdown("Merkmale mit Änderungsbedarf je Typ:")
+    for typ, opt in details:
+        if opt["merkmale"]:
+            kosten = f"{opt['kosten']:,.0f} €".replace(",", ".")
+            st.caption(f"{typ}: {', '.join(opt['merkmale'])} · Kosten {kosten}")
+        else:
+            st.caption(f"{typ}: keine Änderung innerhalb des Budgets.")
+
+
+def _typ_merkmal_tabelle(state, uid, typ, profil, features, weights):
+    """Uebersicht der Merkmale mit Aenderungsbedarf fuer EINEN Typ: genau die
+    Deltas, die als Stufen (Aufwandsdiagramm) bzw. Spruenge (Budgetkurve) in die
+    Diagramme eingehen. Ohne Synergiepotenzial, das gehoert in die
+    Massnahmenplanung."""
+    import pandas as pd
+    felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
+    if not felder:
+        st.caption("Keine Änderung nötig, der Ist-Zustand entspricht bereits dem "
+                   "Profil dieses Typs.")
+        return
+    zeilen = []
+    for f in felder:
+        kost = core.get_kosten(state, uid, typ, f["merkmal"])
+        dau = core.get_dauer(state, uid, typ, f["merkmal"])
+        zeilen.append({
+            "Merkmal": f["merkmal"],
+            "Ist": _fmt_auspr(f["ist"]),
+            "Ziel": f["soll"],
+            "Ähnlichkeitsgewinn": f"+{f['gewinn'] * 100:.1f} %-Pkt.",
+            "Aufwand": core.AUFWAND_LABEL.get(f["aufwand"], "—"),
+            "Kosten": (f"{kost:,.0f} €".replace(",", ".")
+                       if kost is not None else "—"),
+            "Dauer": (f"{dau:.0f} Wo." if dau is not None else "—"),
+        })
+    st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+
+
+def _zieltyp_festlegung(state, uid, auswahl):
+    """Festlegung des finalen Zieltyps als Einzelauswahl-Dropdown, analog zum
+    Auswahlfeld der Typenvorauswahl. Die erste Option hebt die Festlegung auf."""
+    st.subheader("Zieltyp festlegen")
+    final = core.get_zieltyp(state, uid)
+    KEINE = "— noch nicht festgelegt —"
+    optionen = [KEINE] + list(auswahl)
+    index = optionen.index(final) if final in auswahl else 0
+    wahl = st.selectbox(
+        f"Zieltyp für Betrachtungseinheit {core.get_name(state, uid)}",
+        options=optionen, index=index, key=f"zieltyp_wahl_{uid}",
+        help="Der Zieltyp ist die verbindliche Grundlage der Massnahmenplanung.")
+    neuer = None if wahl == KEINE else wahl
+    if neuer != final:
+        core.set_zieltyp(state, uid, neuer)
+        st.rerun()
+
+
 def seite_zusammenfassung(state, features, types, weights):
     st.title("Konfigurator — Typvergleich")
 
@@ -1131,56 +1422,46 @@ def seite_zusammenfassung(state, features, types, weights):
               (core.AUFWAND_HOCH,   "k = 3  alle Änderungen")]
 
     st.divider()
-    for uid in state["units"]:
-        auswahl = core.get_engere_auswahl(state, uid)
-        st.header(f"Betrachtungseinheit {uid}")
-        if not auswahl:
-            st.caption("Keine Typen in der engeren Auswahl.")
+    _tabs = st.tabs([core.get_name(state, uid) for uid in state["units"]])
+    for _tab, uid in zip(_tabs, state["units"]):
+        with _tab:
+            auswahl = core.get_engere_auswahl(state, uid)
+            if not auswahl:
+                st.caption("Keine Typen in der engeren Auswahl.")
+                st.divider()
+                continue
+
+            final = core.get_zieltyp(state, uid)
+
+            # 1. Merkmale mit Aenderungsbedarf je Typ (die Deltas, die als
+            #    Stufen bzw. Spruenge in die beiden Diagramme eingehen).
+            st.subheader("Merkmale mit Änderungsbedarf")
+            for typ in auswahl:
+                marke = "⭐ " if typ == final else ""
+                st.markdown(f"### {marke}{typ}")
+                _typ_merkmal_tabelle(state, uid, typ, types[typ],
+                                     features, weights)
+
+            # 2. Zwei Sichten auf die erreichbare Aehnlichkeit: nach
+            #    Aufwandsstufe (Rueckgrat) und nach Budget (kostenbewusst).
+            st.markdown("**Erreichbare Ähnlichkeit nach Aufwand**")
+            _stufendiagramm(state, features, types, weights, uid, auswahl)
+            st.markdown("**Erreichbare Ähnlichkeit nach Budget**")
+            _budgetdiagramm(state, features, types, weights, uid, auswahl)
+
+            # 3. Budget-Loeser: bester Typ zu einem konkret eingegebenen Budget
+            #    (exaktes Optimum statt gieriger Kurve).
+            st.markdown("**Bester Typ bei gegebenem Budget**")
+            _budget_loeser(state, features, types, weights, uid, auswahl)
+
+            # 3b. Dauer der Aenderungen als Balken (alle bei null beginnend).
+            st.markdown("**Dauer der Änderungen**")
+            _dauer_diagramm(state, features, types, weights, uid, auswahl)
+
+            # 4. Zieltyp festlegen: Einzelauswahl-Dropdown ganz unten, nachdem
+            #    Tabellen und Diagramme die Grundlage geliefert haben.
+            _zieltyp_festlegung(state, uid, auswahl)
             st.divider()
-            continue
-
-        final = core.get_zieltyp(state, uid)
-
-        # Gemeinsames Stufendiagramm ueber alle Typen der engeren Auswahl.
-        _stufendiagramm(state, features, types, weights, uid, auswahl)
-
-        # Kennzahlen und Zieltyp-Festlegung je Typ. Reihen zu hoechstens drei
-        # Spalten, damit die Darstellung auch bei vielen Typen lesbar bleibt.
-        pro_reihe = 3
-        for start in range(0, len(auswahl), pro_reihe):
-            gruppe = auswahl[start:start + pro_reihe]
-            spalten = st.columns(pro_reihe)
-            for sp, typ in zip(spalten, gruppe):
-                with sp:
-                    profil = types[typ]
-                    score = core.soll_score_gestaffelt(state, uid, typ, profil,
-                                                       features, weights)
-                    vert = core.aufwand_verteilung(state, uid, typ, profil,
-                                                   features)
-                    titel = f"⭐ {typ}" if typ == final else typ
-                    st.markdown(f"### {titel}")
-                    for stufe, name in stufen:
-                        wert = score[stufe]
-                        st.markdown(f"{name}: **{wert * 100:.0f}%**")
-                        st.progress(wert)
-                    st.caption(
-                        f"davon Änderungen: {vert[core.AUFWAND_GERING]} gering · "
-                        f"{vert[core.AUFWAND_MITTEL]} mittel · "
-                        f"{vert[core.AUFWAND_HOCH]} hoch")
-                    # Finalen Zieltyp festlegen oder Festlegung aufheben.
-                    if typ == final:
-                        if st.button("★ Festlegung aufheben",
-                                     key=f"unset_ziel_{uid}_{typ}",
-                                     width="stretch"):
-                            core.set_zieltyp(state, uid, None)
-                            st.rerun()
-                    else:
-                        if st.button("Als Zieltyp festlegen",
-                                     key=f"set_ziel_{uid}_{typ}", type="primary",
-                                     width="stretch"):
-                            core.set_zieltyp(state, uid, typ)
-                            st.rerun()
-        st.divider()
 
 
 
@@ -1406,7 +1687,7 @@ def _export_html(state, features, types, weights):
                          "<th>Verantwortlich</th></tr>")
             for z in gruppen[phase]:
                 mn = core.get_hf_massnahme(state, core.hf_schluessel(z))
-                einh = ", ".join(f"BE {u}" for u in z["einheiten"])
+                einh = ", ".join(core.get_name(state, u) for u in z["einheiten"])
                 teile.append(
                     f"<tr><td>{z['merkmal']}</td><td>{einh}</td>"
                     f"<td>{_ist_anzeige(z['ist_werte'])}</td><td>{z['soll']}</td>"
@@ -1487,7 +1768,7 @@ def _harmonisierung(state, features, types, weights):
     for z in zeilen:
         tab.append({
             "Merkmal": z["merkmal"],
-            "Einheit(en)": ", ".join(f"BE {u}" for u in z["einheiten"]),
+            "Einheit(en)": ", ".join(core.get_name(state, u) for u in z["einheiten"]),
             "Ist": _ist_anzeige(z["ist_werte"]),
             "Ziel": z["soll"],
             "Aufwand": core.AUFWAND_LABEL.get(z["aufwand"], "—"),
@@ -1499,7 +1780,7 @@ def _harmonisierung(state, features, types, weights):
     if kand:
         st.markdown("**Synergien zusammenlegen**")
         for (merkmal, soll), einheiten in kand.items():
-            beteiligt = ", ".join(f"BE {u}" for u in einheiten)
+            beteiligt = ", ".join(core.get_name(state, u) for u in einheiten)
             aktuell = core.ist_gebuendelt(state, merkmal, soll)
             neu = st.checkbox(f"{merkmal} → {soll}  ({beteiligt})", value=aktuell,
                               key=f"buendel_{merkmal}_{soll}")
@@ -1543,7 +1824,7 @@ def _detaillierung(state, features, types, weights):
         k = core.hf_schluessel(z)
         ks = _hf_key_str(k)
         m = core.get_hf_massnahme(state, k)
-        einh = ", ".join(f"BE {u}" for u in z["einheiten"])
+        einh = ", ".join(core.get_name(state, u) for u in z["einheiten"])
         kopf = f"{z['merkmal']} → {z['soll']}  ({einh})"
         if m["phase"]:
             kopf += f"   ·   {m['phase']}. Phase"
@@ -1586,7 +1867,7 @@ def seite_massnahmen(state, features, types, weights):
     # BEREICH 1: Abweichung vom Zieltyp je Einheit, reine Anzeige.
     for uid in state["units"]:
         typ = core.get_zieltyp(state, uid)
-        st.header(f"Betrachtungseinheit {uid}")
+        st.header(core.get_name(state, uid))
         if not typ:
             st.caption("Kein Zieltyp festgelegt — uebersprungen.")
             st.divider()
