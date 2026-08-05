@@ -225,6 +225,13 @@ def empty_state():
         # ein Soll gewaehlt ist, das vom Ist abweicht. 1=gering, 2=mittel, 3=hoch.
         # Fehlt fuer ein Merkmal ein Eintrag, ist der Aufwand noch nicht geschaetzt.
         "aufwand": {},
+        # KOSTEN je (uid, typ, merkmal): optionale monetaere Schaetzung in Euro
+        # (float) oder None. Analog zu aufwand, aber freiwillig. Grundlage der
+        # spaeteren Budgetkurve; fehlende Werte bleiben None.
+        "kosten": {},
+        # DAUER je (uid, typ, merkmal): optionale Schaetzung der Umsetzungsdauer
+        # in Wochen (float) oder None. Analog zu kosten, freiwillig.
+        "dauer": {},
         # WELT je Einheit und Merkmal (Tims Regel, explizit ueber Dropdown):
         # unit_id -> { merkmal -> "ist_bekannt" | "ist_unbekannt" }. Standard: ist_bekannt.
         "welt": {},
@@ -246,6 +253,11 @@ def empty_state():
         # HF_MASSNAHMEN: Massnahmen der unternehmensweiten Handlungsfelder, je
         # Handlungsfeld ueber einen Schluessel (siehe hf_schluessel) statt je Einheit.
         "hf_massnahmen": {},
+        # NAMEN je Einheit: unit_id -> frei vergebener Anzeigename (String).
+        # Rein sichtbar; die interne unit_id (Buchstabe) bleibt als Schluessel
+        # stabil. Leer = kein Name gesetzt, dann wird ersatzweise die unit_id
+        # angezeigt. Namen duerfen sich doppeln, ohne dass etwas bricht.
+        "namen": {},
         # Phase: "konfiguration" | "ergebnis" | "potential" | "ergebnis_soll"
         #        | "detaillierung".
         "phase": "konfiguration",
@@ -283,8 +295,11 @@ def add_unit(state, features):
     state["zieltyp"][uid] = None
     state["soll"][uid] = {}   # je Typ eine eigene Soll-Konfiguration (lazy angelegt)
     state["aufwand"][uid] = {}   # je Typ die Aufwaende der Merkmale (lazy angelegt)
+    state["kosten"][uid] = {}    # je Typ die optionalen Kosten der Merkmale
+    state["dauer"][uid] = {}     # je Typ die optionalen Dauern der Merkmale
     state["massnahmen"][uid] = {}   # Massnahmen je Merkmal (lazy angelegt)
     state["welt"][uid] = {m: WELT_IST_BEKANNT for m in features}
+    state["namen"][uid] = ""   # Anzeigename, vom Anwender frei vergebbar
     return uid
 
 
@@ -293,11 +308,26 @@ def remove_unit(state, uid):
     Ausschluss, engere Auswahl, Zieltyp, Ziel, Aufwand, Welt). Der Zaehler
     'vergeben' bleibt unveraendert."""
     for ebene in ("matrix", "potential", "ausschluss", "engere_auswahl",
-                  "zieltyp", "soll", "aufwand", "welt", "massnahmen"):
+                  "zieltyp", "soll", "aufwand", "kosten", "dauer", "welt", "massnahmen", "namen"):
         if uid in state[ebene]:
             del state[ebene][uid]
     if uid in state["units"]:
         state["units"].remove(uid)
+
+
+def get_name(state, uid):
+    """Anzeigename einer Einheit. Der frei vergebene Name, falls gesetzt,
+    sonst die interne unit_id (Buchstabe). So bleibt jede Einheit auch ohne
+    Namen eindeutig benannt."""
+    name = state.get("namen", {}).get(uid, "")
+    return name if name else uid
+
+
+def set_name(state, uid, name):
+    """Setzt den Anzeigenamen einer Einheit. Fuehrende und schliessende
+    Leerzeichen werden entfernt; ein leerer Name faellt auf die unit_id
+    zurueck (siehe get_name). Beruehrt keine Logik, nur die Anzeige."""
+    state.setdefault("namen", {})[uid] = (name or "").strip()
 
 
 def set_choice(state, uid, merkmal, auspraegung):
@@ -873,6 +903,8 @@ def remove_from_engere_auswahl(state, uid, typ_name):
         liste.remove(typ_name)
     state["soll"].get(uid, {}).pop(typ_name, None)
     state["aufwand"].get(uid, {}).pop(typ_name, None)
+    state["kosten"].get(uid, {}).pop(typ_name, None)
+    state["dauer"].get(uid, {}).pop(typ_name, None)
     if state["zieltyp"].get(uid) == typ_name:
         state["zieltyp"][uid] = None
 
@@ -901,6 +933,8 @@ def set_soll(state, uid, typ_name, merkmal, auspraegung):
     soll_typ = state["soll"].setdefault(uid, {}).setdefault(typ_name, {})
     if soll_typ.get(merkmal, OFFEN) != auspraegung:
         state["aufwand"].get(uid, {}).get(typ_name, {}).pop(merkmal, None)
+        state["kosten"].get(uid, {}).get(typ_name, {}).pop(merkmal, None)
+        state["dauer"].get(uid, {}).get(typ_name, {}).pop(merkmal, None)
     soll_typ[merkmal] = auspraegung
 
 
@@ -937,6 +971,34 @@ def set_aufwand(state, uid, typ_name, merkmal, wert):
 def get_aufwand(state, uid, typ_name, merkmal):
     """Liefert den geschaetzten Aufwand oder None (noch nicht geschaetzt)."""
     return state["aufwand"].get(uid, {}).get(typ_name, {}).get(merkmal)
+
+
+def set_kosten(state, uid, typ_name, merkmal, wert):
+    """Optionale Kostenschaetzung (Euro, float) oder None fuer ein Merkmal
+    zu einem Typ. None loescht die Angabe."""
+    if wert is None:
+        state["kosten"].get(uid, {}).get(typ_name, {}).pop(merkmal, None)
+        return
+    state["kosten"].setdefault(uid, {}).setdefault(typ_name, {})[merkmal] = float(wert)
+
+
+def get_kosten(state, uid, typ_name, merkmal):
+    """Kostenschaetzung (Euro) oder None, wenn nicht erfasst."""
+    return state.get("kosten", {}).get(uid, {}).get(typ_name, {}).get(merkmal)
+
+
+def set_dauer(state, uid, typ_name, merkmal, wert):
+    """Optionale Dauerschaetzung (Wochen, float) oder None fuer ein Merkmal zu
+    einem Typ. None loescht die Angabe."""
+    if wert is None:
+        state["dauer"].get(uid, {}).get(typ_name, {}).pop(merkmal, None)
+        return
+    state["dauer"].setdefault(uid, {}).setdefault(typ_name, {})[merkmal] = float(wert)
+
+
+def get_dauer(state, uid, typ_name, merkmal):
+    """Dauerschaetzung (Wochen) oder None, wenn nicht erfasst."""
+    return state.get("dauer", {}).get(uid, {}).get(typ_name, {}).get(merkmal)
 
 
 def soll_kandidaten(status, optionen):
@@ -1145,6 +1207,111 @@ def handlungsfelder(state, uid, typ_name, typ_profil, features, weights=None):
         })
     felder.sort(key=lambda f: ((f["aufwand"] or AUFWAND_HOCH), -f["gewinn"]))
     return felder
+
+
+def budgetkurve(state, uid, typ_name, typ_profil, features, weights=None):
+    """Datenpunkte der Budgetkurve fuer EINEN Typ: erreichbare Ziel-Aehnlichkeit
+    ueber dem kumulierten Budget. Grundlage sind die Handlungsfelder mit erfasster
+    Kostenschaetzung, geordnet nach Aehnlichkeitsgewinn je Euro (guenstigste
+    zuerst). Handlungsfelder ohne Kosten fliessen NICHT in die Kurve ein, weil sie
+    keinen planbaren Budgetbedarf haben; sie werden gesondert zurueckgegeben und
+    deckeln die planbare Kurve.
+
+    Rueckgabe (dict):
+      basis         Aehnlichkeit ohne jede Aenderung (Budget 0), = Stufe 0,
+      punkte        Liste (budget, aehnlichkeit), budget kumuliert, fuer die
+                    Treppe (der erste Punkt ist (0, basis)),
+      deckel        Aehnlichkeit, wenn alle bezifferten Handlungsfelder umgesetzt
+                    sind (Endpunkt der planbaren Kurve),
+      unbeziffert   Liste der Handlungsfelder ohne Kosten (dicts wie in
+                    handlungsfelder),
+      gewinn_offen  Summe der Gewinne der unbezifferten Handlungsfelder,
+      max_gesamt    deckel + gewinn_offen (theoretisch voll erreichbar).
+    """
+    felder = handlungsfelder(state, uid, typ_name, typ_profil, features, weights)
+    score = soll_score_gestaffelt(state, uid, typ_name, typ_profil, features, weights)
+    basis = score[AUFWAND_KEIN]
+
+    mit_kosten, ohne_kosten = [], []
+    for f in felder:
+        k = get_kosten(state, uid, typ_name, f["merkmal"])
+        if k is None:
+            ohne_kosten.append(f)
+        else:
+            mit_kosten.append((k, f))
+    # Guenstigste zuerst: hoher Gewinn je Euro oben. Kosten 0 (falls je erfasst)
+    # ans Ende, um Division durch Null zu vermeiden.
+    mit_kosten.sort(key=lambda kf: (kf[1]["gewinn"] / kf[0]) if kf[0] > 0 else -1.0,
+                    reverse=True)
+
+    # Punkte als (budget, aehnlichkeit, merkmal). Der erste Punkt ist die Basis
+    # ohne Aenderung (merkmal None); jeder weitere Sprung gehoert zu genau einem
+    # Merkmal, das an dieser Stelle hinzugenommen wird.
+    punkte = [(0.0, basis, None)]
+    budget, aehn = 0.0, basis
+    for k, f in mit_kosten:
+        budget += k
+        aehn += f["gewinn"]
+        punkte.append((budget, aehn, f["merkmal"]))
+
+    gewinn_offen = sum(f["gewinn"] for f in ohne_kosten)
+    return {
+        "basis": basis,
+        "punkte": punkte,
+        "deckel": aehn,
+        "unbeziffert": ohne_kosten,
+        "gewinn_offen": gewinn_offen,
+        "max_gesamt": aehn + gewinn_offen,
+    }
+
+
+def budget_optimum(state, uid, typ_name, typ_profil, features, weights, budget):
+    """Exakte Loesung des Auswahlproblems (Rucksack) fuer EINEN Typ: waehlt aus den
+    Merkmalen mit erfasster Kostenschaetzung die Kombination, die das Budget nicht
+    ueberschreitet und die hoechste Ziel-Aehnlichkeit erreicht. Merkmale ohne
+    Kosten bleiben aussen vor.
+
+    Anders als die (gierige) Budgetkurve ist dies das echte Optimum fuer den einen
+    Budgetwert; beide koennen daher in seltenen Faellen leicht abweichen.
+
+    Rueckgabe (dict): aehnlichkeit (erreichbar), merkmale (Liste der gewaehlten),
+    kosten (Summe). Bis zu 16 bezifferte Merkmale werden vollstaendig enumeriert,
+    darueber greift die gierige Naeherung.
+    """
+    felder = handlungsfelder(state, uid, typ_name, typ_profil, features, weights)
+    mit_kosten = [(get_kosten(state, uid, typ_name, f["merkmal"]), f) for f in felder]
+    mit_kosten = [(k, f) for k, f in mit_kosten if k is not None]
+    basis = soll_score_gestaffelt(state, uid, typ_name, typ_profil,
+                                  features, weights)[AUFWAND_KEIN]
+    n = len(mit_kosten)
+
+    if n <= 16:
+        beste_gewinn, beste_maske = 0.0, 0
+        for maske in range(1 << n):
+            ksum = gsum = 0.0
+            for i in range(n):
+                if maske & (1 << i):
+                    ksum += mit_kosten[i][0]
+                    gsum += mit_kosten[i][1]["gewinn"]
+            if ksum <= budget and gsum > beste_gewinn:
+                beste_gewinn, beste_maske = gsum, maske
+        gewaehlt = [mit_kosten[i][1] for i in range(n) if beste_maske & (1 << i)]
+        kosten = sum(mit_kosten[i][0] for i in range(n) if beste_maske & (1 << i))
+    else:
+        rang = sorted(mit_kosten, key=lambda kf: kf[1]["gewinn"] / kf[0],
+                      reverse=True)
+        gewaehlt, kosten, rest = [], 0.0, budget
+        for k, f in rang:
+            if k <= rest:
+                gewaehlt.append(f)
+                kosten += k
+                rest -= k
+
+    return {
+        "aehnlichkeit": basis + sum(f["gewinn"] for f in gewaehlt),
+        "merkmale": [f["merkmal"] for f in gewaehlt],
+        "kosten": kosten,
+    }
 
 
 def nicht_erreichte_merkmale(state, uid, typ_name, typ_profil, features):
