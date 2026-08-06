@@ -275,20 +275,21 @@ def _sidebar_bewertung(state):
         if st.button("← Zurueck zur Zustandsaufnahme", width="stretch"):
             state["phase"] = "konfiguration"
             st.rerun()
-        hat_auswahl = any(core.get_engere_auswahl(state, uid)
-                          for uid in state["units"])
+        offen = [core.get_name(state, uid) for uid in state["units"]
+                 if not core.get_engere_auswahl(state, uid)]
+        alle_haben = bool(state["units"]) and not offen
         if st.button("Weiter zur Zieltypbestimmung →", type="primary",
-                     width="stretch", disabled=not hat_auswahl):
+                     width="stretch", disabled=not alle_haben):
             state["phase"] = "detaillierung"
             st.rerun()
         st.divider()
-        if hat_auswahl:
-            st.caption("Mindestens ein Typ ist in der engeren Auswahl. Du kannst "
-                       "zur Zieltypbestimmung weitergehen.")
+        if alle_haben:
+            st.caption("Für jede Einheit ist mindestens ein Typ in der engeren "
+                       "Auswahl. Du kannst zur Zieltypbestimmung weitergehen.")
         else:
-            st.caption("Waehle im Hauptbereich fuer jede Einheit bis zu drei Typen "
-                       "in die engere Auswahl. Sobald mindestens ein Typ gewaehlt "
-                       "ist, kannst du weiter.")
+            st.caption("Waehle im Hauptbereich fuer jede Einheit mindestens einen "
+                       "Typ in die engere Auswahl. Erst dann kannst du weiter. Es "
+                       "fehlt noch: " + ", ".join(offen) + ".")
 
 
 def _sidebar_sollfestlegung(state, features):
