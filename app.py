@@ -327,7 +327,7 @@ def _sidebar_typvergleich(state):
         offen = [uid for uid in state["units"]
                  if core.get_engere_auswahl(state, uid)
                  and core.get_zieltyp(state, uid) is None]
-        if st.button("Weiter zur Massnahmenplanung →", type="primary",
+        if st.button("Weiter zur Maßnahmenplanung →", type="primary",
                      width="stretch", disabled=bool(offen)):
             state["phase"] = "massnahmen"
             st.rerun()
@@ -342,7 +342,7 @@ def _sidebar_typvergleich(state):
 def _sidebar_massnahmen(state):
     """Schritt 5 (Massnahmenplanung): Zurueck-Navigation + Hinweis."""
     with st.sidebar:
-        st.header("Massnahmenplanung")
+        st.header("Maßnahmenplanung")
         if st.button("← Zurueck zum Typvergleich", width="stretch"):
             state["phase"] = "zusammenfassung"
             st.rerun()
@@ -856,7 +856,7 @@ def _aufwand_dialog(state, uid, typ, merkmal, ziel_opt, im_profil):
     if not im_profil:
         st.info("Diese Auspraegung liegt ausserhalb des Profils. Sie erhoeht "
                 "die Aehnlichkeit zum Zieltyp nicht. Der Aufwand wird dennoch "
-                "erfasst und steht fuer die spaetere Massnahmenplanung bereit.")
+                "erfasst und steht fuer die spaetere Transformationsplanung bereit.")
     stufen = list(core.AUFWAND_STUFEN)
     aktueller = core.get_aufwand(state, uid, typ, merkmal)
     vor = stufen.index(aktueller) if aktueller in stufen else None
@@ -1206,9 +1206,9 @@ def _budgetdiagramm(state, features, types, weights, uid, auswahl):
     zeilen, infos, hat_kurve = [], [], False
     for typ in auswahl:
         bk = core.budgetkurve(state, uid, typ, types[typ], features, weights)
-        for budget, aehn, merkmal in bk["punkte"]:
+        for budget, aehn, merkmale in bk["punkte"]:
             zeilen.append({"budget": budget, "aehnlichkeit": aehn, "typ": typ,
-                           "merkmal": merkmal or ""})
+                           "merkmale": " + ".join(merkmale) if merkmale else "—"})
         if len(bk["punkte"]) > 1:
             hat_kurve = True
         infos.append((typ, bk))
@@ -1230,18 +1230,14 @@ def _budgetdiagramm(state, features, types, weights, uid, auswahl):
                     axis=alt.Axis(format="%", title="erreichbare Ähnlichkeit")),
             color=alt.Color("typ:N", title="Typ"),
         )
-        linie = grund.mark_line(interpolate="step-after", point=True,
-                                strokeWidth=2).encode(
+        diagramm = grund.mark_line(interpolate="step-after", point=True,
+                                   strokeWidth=2).encode(
             tooltip=[alt.Tooltip("typ:N", title="Typ"),
-                     alt.Tooltip("merkmal:N", title="Merkmal (Sprung)"),
                      alt.Tooltip("budget:Q", title="Budget", format=",.0f"),
                      alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
-                                 format=".0%")])
-        # Beschriftung: je Sprung das ausloesende Merkmal (Basispunkt ohne Label).
-        labels = (grund.transform_filter("datum.merkmal != ''")
-                  .mark_text(align="left", dx=6, dy=-7, fontSize=10)
-                  .encode(text="merkmal:N"))
-        diagramm = (linie + labels).properties(height=340)
+                                 format=".0%"),
+                     alt.Tooltip("merkmale:N", title="enthaltene Merkmale")]
+            ).properties(height=340)
         try:
             st.altair_chart(diagramm, width="stretch")
         except TypeError:
@@ -1259,10 +1255,14 @@ def _budgetdiagramm(state, features, types, weights, uid, auswahl):
                 f"{bk['deckel'] * 100:.0f} %, mit diesen Aenderungen waeren bis zu "
                 f"{bk['max_gesamt'] * 100:.0f} % erreichbar.")
 
-    st.caption("Budget 0 ist die ohne jede Änderung erreichte Übereinstimmung. "
-               "Jede Stufe fügt das Merkmal mit dem höchsten "
-               "Ähnlichkeitsgewinn je Euro hinzu, die Verläufe können daher "
-               "nicht fallen.")
+    if any(not bk.get("exakt", True) for _, bk in infos):
+        st.caption("Bei mindestens einem Typ liegen sehr viele bezifferte "
+                   "Handlungsfelder vor, dort wird die Kurve näherungsweise "
+                   "gerechnet.")
+    st.caption("Die Kurve zeigt zu jedem Budget die höchste erreichbare "
+               "Ähnlichkeit über alle Kombinationen der bezifferten Maßnahmen. "
+               "Beim Überfahren eines Punktes erscheinen die darin enthaltenen "
+               "Merkmale.")
 
 
 def _dauer_diagramm(state, features, types, weights, uid, auswahl):
@@ -1304,66 +1304,6 @@ def _dauer_diagramm(state, features, types, weights, uid, auswahl):
                "bestimmt die längste Dauer die Gesamtdauer.")
 
 
-def _budget_loeser(state, features, types, weights, uid, auswahl):
-    """Budget-Loeser: der Anwender gibt ein Budget ein, das Werkzeug bestimmt je
-    Typ die unter diesem Budget beste erreichbare Aehnlichkeit (exaktes Optimum,
-    Rucksack) und zeigt sie als Balken. Der beste Typ und die je Typ enthaltenen
-    Merkmale werden benannt. Anders als die Budgetkurve, die gierig ordnet, ist
-    dies das echte Optimum fuer den eingegebenen Budgetwert."""
-    import pandas as pd
-    hat = any(core.get_kosten(state, uid, typ, f["merkmal"]) is not None
-              for typ in auswahl
-              for f in core.handlungsfelder(state, uid, typ, types[typ],
-                                            features, weights))
-    if not hat:
-        st.caption("Sobald Kosten erfasst sind, laesst sich hier zu einem Budget "
-                   "der beste Typ bestimmen.")
-        return
-
-    budget = st.number_input("Verfügbares Budget in Euro", min_value=0.0,
-                             value=50000.0, step=10000.0, format="%.0f",
-                             key=f"budget_{uid}")
-
-    zeilen, details = [], []
-    for typ in auswahl:
-        opt = core.budget_optimum(state, uid, typ, types[typ], features,
-                                  weights, budget)
-        zeilen.append({"typ": typ, "aehnlichkeit": opt["aehnlichkeit"]})
-        details.append((typ, opt))
-    df = pd.DataFrame(zeilen)
-    bester = max(details, key=lambda td: td[1]["aehnlichkeit"])[0]
-    bester_wert = max(td[1]["aehnlichkeit"] for td in details)
-
-    try:
-        import altair as alt
-        chart = (alt.Chart(df).mark_bar().encode(
-            x=alt.X("aehnlichkeit:Q", scale=alt.Scale(domain=[0, 1]),
-                    axis=alt.Axis(format="%", title="erreichbare Ähnlichkeit")),
-            y=alt.Y("typ:N", sort="-x", title="Typ"),
-            color=alt.condition(alt.datum.typ == bester,
-                                alt.value("#2a78d6"), alt.value("#b8c4d0")),
-            tooltip=[alt.Tooltip("typ:N", title="Typ"),
-                     alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
-                                 format=".0%")])
-            .properties(height=60 + 42 * len(df)))
-        try:
-            st.altair_chart(chart, width="stretch")
-        except TypeError:
-            st.altair_chart(chart, use_container_width=True)
-    except Exception:
-        st.bar_chart(df.set_index("typ"))
-
-    st.markdown(f"Bester Typ bei diesem Budget: **{bester}** "
-                f"({bester_wert * 100:.0f} % Ähnlichkeit).")
-    st.markdown("Merkmale mit Änderungsbedarf je Typ:")
-    for typ, opt in details:
-        if opt["merkmale"]:
-            kosten = f"{opt['kosten']:,.0f} €".replace(",", ".")
-            st.caption(f"{typ}: {', '.join(opt['merkmale'])} · Kosten {kosten}")
-        else:
-            st.caption(f"{typ}: keine Änderung innerhalb des Budgets.")
-
-
 def _typ_merkmal_tabelle(state, uid, typ, profil, features, weights):
     """Uebersicht der Merkmale mit Aenderungsbedarf fuer EINEN Typ: genau die
     Deltas, die als Stufen (Aufwandsdiagramm) bzw. Spruenge (Budgetkurve) in die
@@ -1403,7 +1343,7 @@ def _zieltyp_festlegung(state, uid, auswahl):
     wahl = st.selectbox(
         f"Zieltyp für Betrachtungseinheit {core.get_name(state, uid)}",
         options=optionen, index=index, key=f"zieltyp_wahl_{uid}",
-        help="Der Zieltyp ist die verbindliche Grundlage der Massnahmenplanung.")
+        help="Der Zieltyp ist die verbindliche Grundlage der Transformationsplanung.")
     neuer = None if wahl == KEINE else wahl
     if neuer != final:
         core.set_zieltyp(state, uid, neuer)
@@ -1452,9 +1392,6 @@ def seite_zusammenfassung(state, features, types, weights):
 
             # 3. Budget-Loeser: bester Typ zu einem konkret eingegebenen Budget
             #    (exaktes Optimum statt gieriger Kurve).
-            st.markdown("**Bester Typ bei gegebenem Budget**")
-            _budget_loeser(state, features, types, weights, uid, auswahl)
-
             # 3b. Dauer der Aenderungen als Balken (alle bei null beginnend).
             st.markdown("**Dauer der Änderungen**")
             _dauer_diagramm(state, features, types, weights, uid, auswahl)
@@ -1654,75 +1591,150 @@ def _morphologie_html(state, uid, typ_name, typ_profil, features):
     return "\n".join(teile)
 
 
+_BE_FARBEN = ["#2a78d6", "#d64545", "#2f9e44", "#e8590c", "#7048e8",
+              "#0c8599", "#c2255c", "#5c940d", "#1864ab", "#a61e4d"]
+
+
+def _be_farben(einheiten):
+    """Ordnet jeder Betrachtungseinheit eine feste Farbe aus der Palette zu."""
+    return {uid: _BE_FARBEN[i % len(_BE_FARBEN)] for i, uid in enumerate(einheiten)}
+
+
+def _be_legende_html(state, einheiten, farben):
+    """Farblegende der Einheiten mit Erklaerung der Ist-/Ziel-Kennzeichnung."""
+    teile = ["<p class='leg'><b>Einheiten:</b> "]
+    for uid in einheiten:
+        teile.append(f"<span class='bg z' style='background:{farben[uid]}'>"
+                     f"{core.get_name(state, uid)}</span> ")
+    teile.append("<br><span class='sub'>Gefüllt = Ziel-Ausprägung, umrandet = "
+                 "heutiger Ist-Zustand, „= Name“ = Ist entspricht bereits dem "
+                 "Ziel.</span></p>")
+    return "".join(teile)
+
+
+def _gemeinsamer_kasten_html(state, einheiten, features, types, farben):
+    """Ein morphologischer Kasten fuer alle Einheiten. Je Merkmal und Auspraegung
+    werden die Einheiten als farbige Marken eingetragen: Ziel gefuellt, Ist
+    umrandet, Ist gleich Ziel gefuellt mit vorangestelltem Gleichheitszeichen."""
+    spalten = max((len(features[m]) for m in features), default=0)
+    teile = ["<table class='morph'>"]
+    for m in features:
+        optionen = list(features[m])
+        teile.append(f"<tr><th class='mn'>{m}</th>")
+        for opt in optionen:
+            marken = []
+            for uid in einheiten:
+                typ = core.get_zieltyp(state, uid)
+                ist = core.get_choice(state, uid, m)
+                soll = core.get_soll(state, uid, typ, m) if typ else core.OFFEN
+                if soll is core.OFFEN or soll == core.NICHTS_ANSTREBEN:
+                    soll = None
+                nm = core.get_name(state, uid)
+                c = farben[uid]
+                if ist == opt and soll == opt:
+                    marken.append(f"<span class='bg z' style='background:{c}'>= {nm}</span>")
+                elif soll == opt:
+                    marken.append(f"<span class='bg z' style='background:{c}'>{nm}</span>")
+                elif ist == opt:
+                    marken.append(f"<span class='bg i' style='color:{c};"
+                                  f"border-color:{c}'>{nm}</span>")
+            inner = f"<div class='bgs'>{''.join(marken)}</div>" if marken else ""
+            teile.append(f"<td>{opt}{inner}</td>")
+        teile.extend("<td class='leer'></td>" for _ in range(spalten - len(optionen)))
+        teile.append("</tr>")
+    teile.append("</table>")
+    return "".join(teile)
+
+
 def _export_html(state, features, types, weights):
-    """Erzeugt das Gesamtergebnis als HTML. Der Anwender kann daraus ueber die
-    Druckfunktion seines Browsers ein PDF erstellen."""
+    """Erzeugt das Gesamtergebnis als HTML. Aufbau: je Einheit der Zieltyp und die
+    erreichbare Aehnlichkeit je Aufwandsstufe, die Priorisierung der Einheiten, die
+    harmonisierte Massnahmentabelle und ein gemeinsamer morphologischer Kasten mit
+    allen Einheiten. Der Anwender kann daraus ueber die Druckfunktion seines
+    Browsers ein PDF erstellen."""
+    einheiten = state["units"]
+    farben = _be_farben(einheiten)
+    stufen = [(core.AUFWAND_KEIN, "ohne"), (core.AUFWAND_GERING, "gering"),
+              (core.AUFWAND_MITTEL, "mittel"), (core.AUFWAND_HOCH, "hoch")]
+
+    def dd(xs):
+        return " + ".join(dict.fromkeys(x for x in xs if x)) or "—"
+
     teile = ["<html><head><meta charset='utf-8'><title>Konfigurationsergebnis</title>",
              "<style>body{font-family:sans-serif;margin:2cm;line-height:1.5}",
              "table{border-collapse:collapse;width:100%;margin:1em 0}",
              "th,td{border:1px solid #999;padding:6px;text-align:left;font-size:10pt}",
              "th{background:#eee}h1{font-size:18pt}h2{font-size:14pt;margin-top:2em}",
-             "h3{font-size:12pt}",
-             "table.morph td{text-align:center;font-size:8.5pt;vertical-align:top}",
-             "table.morph td.kp{background:#c8c8c8}",
+             "table.morph td{text-align:center;font-size:9pt;vertical-align:top}",
              "table.morph td.leer{background:#fafafa;border:none}",
-             "table.morph th.mn{width:18%;font-weight:600;background:#f4f4f4}",
-             "table.morph th.block{background:#ddd;text-align:left;font-size:10pt}",
-             "span.mk{font-weight:700;font-size:8pt;white-space:nowrap}",
-             "p.leg{font-size:9pt;color:#444}</style></head><body>",
+             "table.morph th.mn{width:16%;font-weight:600;background:#f4f4f4;text-align:left}",
+             "div.bgs{margin-top:3px}",
+             "span.bg{display:inline-block;padding:1px 5px;margin:1px;border-radius:3px;"
+             "font-size:8pt;font-weight:600;white-space:nowrap}",
+             "span.bg.z{color:#fff}span.bg.i{background:#fff;border:1.5px solid}",
+             "p.leg{font-size:10pt;color:#333}.sub{font-size:8.5pt;color:#555}",
+             "</style></head><body>",
              "<h1>Ergebnis des Konfigurationsvorgehens</h1>"]
 
-    # Unternehmensweiter Massnahmenplan, nach Phasen geordnet.
-    zeilen = _uw_zeilen(state, features, types, weights)
-    if zeilen:
-        core.hf_phase_vorbelegen(state, zeilen)
-        gruppen = core.hf_nach_phase(state, zeilen)
-        teile.append("<h2>Unternehmensweiter Massnahmenplan</h2>")
-        for phase in core.PHASEN:
-            if not gruppen.get(phase):
-                continue
-            teile.append(f"<h3>{phase}. Phase</h3>")
-            teile.append("<table><tr><th>Merkmal</th><th>Einheit(en)</th>"
-                         "<th>Ist</th><th>Ziel</th><th>Aufwand</th>"
-                         "<th>Ähnlichkeitsgewinn</th><th>Massnahme</th>"
-                         "<th>Verantwortlich</th></tr>")
-            for z in gruppen[phase]:
-                mn = core.get_hf_massnahme(state, core.hf_schluessel(z))
-                einh = ", ".join(core.get_name(state, u) for u in z["einheiten"])
-                teile.append(
-                    f"<tr><td>{z['merkmal']}</td><td>{einh}</td>"
-                    f"<td>{_ist_anzeige(z['ist_werte'])}</td><td>{z['soll']}</td>"
-                    f"<td>{core.AUFWAND_LABEL.get(z['aufwand'], '—')}</td>"
-                    f"<td>+{z['gewinn'] * 100:.1f} %-Pkt.</td>"
-                    f"<td>{mn['text'] or '—'}</td>"
-                    f"<td>{mn['wer'] or '—'}</td></tr>")
-            teile.append("</table>")
-
-    # Je Einheit die erreichbare Ähnlichkeit, der morphologische Kasten und die
-    # nicht erreichten Merkmale.
-    for uid in state["units"]:
+    # 1. Zieltyp und erreichbare Aehnlichkeit je Aufwandsstufe.
+    teile.append("<h2>Zieltypen und erreichbare Ähnlichkeit</h2>")
+    teile.append("<table><tr><th>Betrachtungseinheit</th><th>Zieltyp</th>"
+                 + "".join(f"<th>Aufwand {n}</th>" for _, n in stufen) + "</tr>")
+    for uid in einheiten:
         typ = core.get_zieltyp(state, uid)
-        teile.append(f"<h2>Betrachtungseinheit {uid}</h2>")
+        nm = core.get_name(state, uid)
         if not typ:
-            teile.append("<p>Kein Zieltyp festgelegt.</p>")
+            teile.append(f"<tr><td>{nm}</td><td>—</td>"
+                         + "".join("<td>—</td>" for _ in stufen) + "</tr>")
             continue
-        profil = types[typ]
-        score = core.soll_score_gestaffelt(state, uid, typ, profil, features, weights)
-        teile.append(f"<p><b>Zieltyp:</b> {typ}</p>")
-        teile.append("<p><b>Erreichbare Ähnlichkeit je Aufwandsstufe:</b> "
-                     + " &nbsp; ".join(f"k={k}: {score[k]*100:.0f}%"
-                                       for k in core.AUFWAND_STUFEN_K) + "</p>")
-        teile.append("<h3>Morphologischer Kasten mit Zielkonfiguration</h3>")
-        teile.append(_morphologie_html(state, uid, typ, profil, features))
-        nicht = core.nicht_erreichte_merkmale(state, uid, typ, profil, features)
-        if nicht:
-            teile.append("<h3>Nicht erreichte Merkmale</h3><table>"
-                         "<tr><th>Merkmal</th><th>Begruendung</th></tr>")
-            for m, grund in nicht:
-                teile.append(f"<tr><td>{m}</td><td>{grund}</td></tr>")
-            teile.append("</table>")
+        score = core.soll_score_gestaffelt(state, uid, typ, types[typ], features, weights)
+        teile.append(f"<tr><td>{nm}</td><td>{typ}</td>"
+                     + "".join(f"<td>{score[k] * 100:.0f} %</td>" for k, _ in stufen)
+                     + "</tr>")
+    teile.append("</table>")
+
+    # 2. Priorisierung der Einheiten (Rangfolge nach Nutzwert).
+    nw = core.nwa_nutzwerte(state, types, features, weights)
+    if nw:
+        teile.append("<h2>Priorisierung der Einheiten</h2>")
+        teile.append("<p>Reihenfolge, in der die Einheiten angegangen werden "
+                     "sollten, nach der Nutzwertanalyse.</p>")
+        teile.append("<table><tr><th>Rang</th><th>Einheit</th><th>Nutzwert</th></tr>")
+        for rang, (uid, wert) in enumerate(nw, 1):
+            teile.append(f"<tr><td>{rang}</td><td>{core.get_name(state, uid)}</td>"
+                         f"<td>{wert * 100:.1f} %</td></tr>")
+        teile.append("</table>")
+
+    # 3. Harmonisierte Massnahmen.
+    massnahmen = core.massnahmen_liste(state, types, features, weights)
+    if massnahmen:
+        teile.append("<h2>Harmonisierte Maßnahmen</h2>")
+        teile.append("<table><tr><th>Nr.</th><th>Merkmal</th><th>Einheit(en)</th>"
+                     "<th>Ist</th><th>Ziel</th><th>Ähnlichkeitsgewinn</th>"
+                     "<th>Aufwand</th><th>Kosten</th><th>Dauer</th>"
+                     "<th>Voraussetzung</th></tr>")
+        for i, m in enumerate(massnahmen, 1):
+            det = core.get_hf_massnahme(state, m["id"])
+            kt = (f"{m['kosten']:,.0f} €".replace(",", ".")
+                  if m["kosten"] is not None else "—")
+            dt = f"{m['dauer']:.0f} Wo." if m["dauer"] is not None else "—"
+            einh = ", ".join(core.get_name(state, u) for u in m["einheiten"])
+            teile.append(
+                f"<tr><td>{i}</td><td>{dd(m['merkmale'])}</td><td>{einh}</td>"
+                f"<td>{dd(m['ist_texte'])}</td><td>{dd(m['ziele'])}</td>"
+                f"<td>+{m['gewinn'] * 100:.1f} %-Pkt.</td>"
+                f"<td>{core.AUFWAND_LABEL.get(m['aufwand'], '—')}</td>"
+                f"<td>{kt}</td><td>{dt}</td>"
+                f"<td>{det.get('voraussetzung', '') or '—'}</td></tr>")
+        teile.append("</table>")
+
+    # 4. Gemeinsamer morphologischer Kasten mit allen Einheiten.
+    teile.append("<h2>Morphologischer Kasten mit allen Einheiten</h2>")
+    teile.append(_be_legende_html(state, einheiten, farben))
+    teile.append(_gemeinsamer_kasten_html(state, einheiten, features, types, farben))
+
     teile.append("</body></html>")
-    return "\n".join(teile)
+    return "".join(teile)
 
 
 def _ist_anzeige(ist_werte):
@@ -1748,167 +1760,395 @@ def _uw_zeilen(state, features, types, weights):
     return core.unternehmensweite_uebersicht(state, types, features, weights)
 
 
+@st.dialog("Gemeinsame Werte der Zusammenlegung")
+def _buendel_dialog(state, merkmal, soll, einheiten):
+    """Erfasst beim Zusammenlegen gleicher Ziele die gemeinsamen Werte. Der
+    Aehnlichkeitsgewinn addiert sich automatisch, hier geht es nur um Aufwand,
+    Kosten und Dauer der einmal gemeinsam umgesetzten Aenderung. Vorschlag ist
+    jeweils der hoechste Einzelwert der beteiligten Einheiten."""
+    st.markdown(f"**{merkmal} → {soll}**")
+    st.caption("Beteiligt: " + ", ".join(core.get_name(state, u) for u in einheiten))
+    au, ks, ds = core.einzelwerte(state, einheiten, merkmal)
+    bw = core.get_buendel_werte(state, merkmal, soll) or {}
+    v_auf = bw.get("aufwand", max(au) if au else None)
+    v_kos = bw.get("kosten", max(ks) if ks else None)
+    v_dau = bw.get("dauer", max(ds) if ds else None)
+    st.caption("Vorschlag ist der höchste Einzelwert der beteiligten Einheiten.")
+    stufen = list(core.AUFWAND_STUFEN)
+    idx = stufen.index(v_auf) if v_auf in stufen else None
+    aufwand = st.radio("Gemeinsamer Aufwand", stufen,
+                       format_func=lambda x: core.AUFWAND_LABEL[x],
+                       index=idx, horizontal=True)
+    kosten = st.number_input("Gemeinsame Kosten in Euro (optional)", min_value=0.0,
+                             value=v_kos, step=1000.0, format="%.0f")
+    dauer = st.number_input("Gemeinsame Dauer in Wochen (optional)", min_value=0.0,
+                            value=v_dau, step=1.0, format="%.0f")
+    sp1, sp2 = st.columns(2)
+    if sp1.button("Speichern", type="primary", width="stretch"):
+        core.set_buendel_werte(state, merkmal, soll, aufwand, kosten, dauer)
+        st.rerun()
+    if sp2.button("Abbrechen", width="stretch"):
+        st.rerun()
+
+
 def _harmonisierung(state, features, types, weights):
-    """Bereich 2: unternehmensweite Zusammenfuehrung. Hier werden aus den
-    Abweichungen der Einheiten Handlungsfelder, und gleiche Ziele lassen sich zu
-    einem gemeinsamen Handlungsfeld zusammenlegen."""
+    """Vierter Schritt, Teil 1: unternehmensweite Harmonisierung. Die Aenderungen
+    aller Einheiten werden als durchnummerierte Massnahmen gefuehrt. Ueber ein
+    Auswahlfeld lassen sich beliebige Massnahmen zu einer gemeinsamen zusammenlegen,
+    sei es wegen gleicher Ziele oder gleicher Voraussetzungen. Gleiche Ziele werden
+    zusaetzlich als Textvorschlag hervorgehoben. Die Voraussetzung je Massnahme ist
+    direkt editierbar."""
     import pandas as pd
     zeilen = _uw_zeilen(state, features, types, weights)
-    if zeilen is None:
+    if zeilen is None or not zeilen:
         return
-
+    massnahmen = core.massnahmen_liste(state, types, features, weights)
     st.header("Harmonisierung")
-    st.caption("Die Abweichungen aller Betrachtungseinheiten werden hier zu "
-               "Handlungsfeldern und nach Merkmal geordnet zusammengefuehrt. Wo "
-               "mehrere Einheiten dieselbe Ziel-Ausprägung anstreben, laesst sich das "
-               "Handlungsfeld zusammenlegen und einmal gemeinsam umsetzen. Der "
-               "Ähnlichkeitsgewinn eines zusammengelegten Handlungsfeldes ist die "
-               "Summe ueber die beteiligten Einheiten.")
+    st.caption("Die Änderungen aller Einheiten werden als Maßnahmen geführt. Über "
+               "das Auswahlfeld lassen sich Maßnahmen mit gleichem Ziel oder "
+               "gleicher Voraussetzung zu einer gemeinsamen Maßnahme zusammenlegen. "
+               "Der Ähnlichkeitsgewinn addiert sich, Aufwand, Kosten und Dauer werden "
+               "gemeinsam erfasst. Die Voraussetzungs-Spalte ist bearbeitbar.")
 
-    tab = []
-    for z in zeilen:
-        tab.append({
-            "Merkmal": z["merkmal"],
-            "Einheit(en)": ", ".join(core.get_name(state, u) for u in z["einheiten"]),
-            "Ist": _ist_anzeige(z["ist_werte"]),
-            "Ziel": z["soll"],
-            "Aufwand": core.AUFWAND_LABEL.get(z["aufwand"], "—"),
-            "Ähnlichkeitsgewinn": f"+{z['gewinn'] * 100:.1f} %-Pkt.",
+    def _dedup(xs):
+        return " + ".join(dict.fromkeys(x for x in xs if x)) or "—"
+
+    daten = []
+    for i, m in enumerate(massnahmen, 1):
+        det = core.get_hf_massnahme(state, m["id"])
+        daten.append({
+            "Maßnahme": str(i),
+            "Merkmal": _dedup(m["merkmale"]),
+            "Einheit(en)": ", ".join(core.get_name(state, u) for u in m["einheiten"]),
+            "Ist": _dedup(m["ist_texte"]),
+            "Ziel": _dedup(m["ziele"]),
+            "Ähnlichkeitsgewinn": f"+{m['gewinn'] * 100:.1f} %-Pkt.",
+            "Aufwand": core.AUFWAND_LABEL.get(m["aufwand"], "—"),
+            "Kosten": (f"{m['kosten']:,.0f} €".replace(",", ".")
+                       if m["kosten"] is not None else "—"),
+            "Dauer": (f"{m['dauer']:.0f} Wo." if m["dauer"] is not None else "—"),
+            "Voraussetzung": det.get("voraussetzung", ""),
         })
-    st.dataframe(pd.DataFrame(tab), hide_index=True, width="stretch")
+    df = pd.DataFrame(daten)
+    fest = ["Maßnahme", "Merkmal", "Einheit(en)", "Ist", "Ziel",
+            "Ähnlichkeitsgewinn", "Aufwand", "Kosten", "Dauer"]
+    edit = st.data_editor(
+        df, hide_index=True, width="stretch",
+        key=f"harm_editor_{len(massnahmen)}",
+        column_config={
+            **{c: st.column_config.TextColumn(disabled=True) for c in fest},
+            "Voraussetzung": st.column_config.TextColumn(
+                help="Enabler, der vorliegen muss: etwa ERP-Modul, neues Werk, "
+                     "Mitarbeiterqualifizierung, Partner oder Fläche."),
+        })
 
-    kand = core.buendel_kandidaten(state, types, features, weights)
-    if kand:
-        st.markdown("**Synergien zusammenlegen**")
-        for (merkmal, soll), einheiten in kand.items():
-            beteiligt = ", ".join(core.get_name(state, u) for u in einheiten)
-            aktuell = core.ist_gebuendelt(state, merkmal, soll)
-            neu = st.checkbox(f"{merkmal} → {soll}  ({beteiligt})", value=aktuell,
-                              key=f"buendel_{merkmal}_{soll}")
-            if neu != aktuell:
-                core.toggle_buendel(state, merkmal, soll)
+    def _txt(w):
+        return str(w) if pd.notna(w) else ""
+
+    for i, m in enumerate(massnahmen):
+        core.set_hf_massnahme(state, m["id"],
+                              voraussetzung=_txt(edit.iloc[i]["Voraussetzung"]))
+
+    # Textvorschlag: gleiche Ziele ueber mehrere Einheiten, noch nicht zusammengelegt.
+    teile = []
+    for (merkmal, soll), einheiten in core.buendel_kandidaten(
+            state, types, features, weights).items():
+        schluessel = [("e", u, merkmal) for u in einheiten]
+        if all(core.synergie_von(state, k) is None for k in schluessel):
+            namen = ", ".join(core.get_name(state, u) for u in einheiten)
+            teile.append(f"„{merkmal} → {soll}“ ({namen})")
+    if teile:
+        st.info("Gleiche Ziele bieten sich zum Zusammenlegen an: " + "; ".join(teile)
+                + ". Wählen Sie die betreffenden Maßnahmen unten aus.")
+
+    # Ein Werkzeug: Mehrfachauswahl zum Zusammenlegen beliebiger Massnahmen.
+    st.markdown("**Maßnahmen zusammenlegen**")
+    label = {}
+    for i, m in enumerate(massnahmen, 1):
+        if not m["ist_synergie"]:
+            einh = ", ".join(core.get_name(state, u) for u in m["einheiten"])
+            label[f"{i}: {_dedup(m['merkmale'])} → {_dedup(m['ziele'])} ({einh})"] = m["id"]
+    auswahl = st.multiselect("Maßnahmen für eine gemeinsame Maßnahme wählen",
+                             options=list(label), key="harm_select")
+    if len(auswahl) >= 2:
+        if st.button("Zusammenlegen", type="primary", key="harm_merge"):
+            _synergie_dialog(state, [label[a] for a in auswahl], massnahmen)
+    elif len(auswahl) == 1:
+        st.caption("Bitte mindestens zwei Maßnahmen wählen.")
+
+    synergien = [m for m in massnahmen if m["ist_synergie"]]
+    if synergien:
+        st.caption("Zusammengelegte Maßnahmen wieder auflösen:")
+        for m in synergien:
+            sp1, sp2 = st.columns([5, 1])
+            sp1.markdown(f"- **{_dedup(m['merkmale'])}**")
+            if sp2.button("Auflösen", key=f"harm_del_{_id_str(m['id'])}"):
+                core.remove_synergie_by_id(state, m["id"])
                 st.rerun()
-    st.caption("Pruefen Sie zusaetzlich inhaltliche Synergien, die das Werkzeug "
-               "nicht erkennt, etwa wenn verschiedene Merkmale dieselbe Ressource "
-               "erfordern.")
+
+
+def _massnahme_label(state, m):
+    """Kurzbezeichnung einer Massnahme aus ihren Merkmalen und Einheiten."""
+    einh = ", ".join(core.get_name(state, u) for u in m["einheiten"])
+    return f"{' + '.join(m['merkmale'])} ({einh})"
+
+
+def _id_str(mid):
+    """Deterministische Stringform einer Massnahmen-id fuer Streamlit-Widget-Keys."""
+    if isinstance(mid, frozenset):
+        return "syn__" + "__".join(sorted("-".join(str(x) for x in k) for k in mid))
+    return "ein__" + "-".join(str(x) for x in mid)
+
+
+def _abhaengigkeitsanalyse(state, massnahmen):
+    """Paarweise Erhebung zwingender Abhaengigkeiten zwischen den Massnahmen. Je Paar
+    legt der Anwender fest, ob eine Massnahme zwingend vor der anderen liegen muss.
+    Diese Zwaenge schraenken die spaetere Reihenfolge hart ein."""
+    import itertools
+    st.subheader("Abhängigkeitsanalyse")
+    if len(massnahmen) < 2:
+        st.caption("Für eine Abhängigkeitsanalyse sind mindestens zwei Maßnahmen "
+                   "nötig.")
+        return
+    st.caption("Legen Sie für jedes Paar fest, ob eine Maßnahme zwingend vor einer "
+               "anderen liegen muss, etwa weil sie deren Voraussetzung schafft. Ohne "
+               "solche Zwänge bestimmen allein Kosten-Nutzen und Pareto die "
+               "Reihenfolge.")
+    OPT = ["keine", "a_vor_b", "b_vor_a"]
+    for a, b in itertools.combinations(massnahmen, 2):
+        la, lb = _massnahme_label(state, a), _massnahme_label(state, b)
+        status = core.abhaengigkeit_status(state, a["id"], b["id"])
+        wahl = st.radio(
+            f"{la}   ·   {lb}", options=OPT, index=OPT.index(status),
+            key=f"dep_{_id_str(a['id'])}___{_id_str(b['id'])}",
+            format_func=lambda o, la=la, lb=lb: {
+                "keine": "keine zwingende Abhängigkeit",
+                "a_vor_b": f"„{la}“ muss vor „{lb}“ liegen",
+                "b_vor_a": f"„{lb}“ muss vor „{la}“ liegen"}[o])
+        if wahl != status:
+            core.clear_abhaengigkeit(state, a["id"], b["id"])
+            if wahl == "a_vor_b":
+                core.set_abhaengigkeit(state, a["id"], b["id"])
+            elif wahl == "b_vor_a":
+                core.set_abhaengigkeit(state, b["id"], a["id"])
+            st.rerun()
+
+
+def _einheiten_portfolio(state, einheiten, types, features, weights):
+    """Streudiagramm der Einheiten: Gesamtaufwand gegen erreichbaren
+    Aehnlichkeitsgewinn. Zeigt, welche Einheit viel Wirkung fuer wenig Aufwand
+    bietet, und stuetzt die Priorisierung visuell."""
+    import pandas as pd
+    df = pd.DataFrame([{
+        "Einheit": core.get_name(state, u),
+        "Aufwand": core.einheit_kennzahlen(state, u, types, features, weights)["aufwand"],
+        "Gewinn": core.einheit_kennzahlen(state, u, types, features, weights)["gewinn"],
+    } for u in einheiten])
+    try:
+        import altair as alt
+        basis = alt.Chart(df).encode(
+            x=alt.X("Aufwand:Q",
+                    axis=alt.Axis(title="Gesamtaufwand (Summe der Aufwandsstufen)")),
+            y=alt.Y("Gewinn:Q", scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format="%", title="erreichbarer Ähnlichkeitsgewinn")))
+        punkte = basis.mark_circle(size=220).encode(
+            tooltip=["Einheit:N", "Aufwand:Q",
+                     alt.Tooltip("Gewinn:Q", format=".0%")])
+        beschriftung = basis.mark_text(dy=-14).encode(text="Einheit:N")
+        chart = (punkte + beschriftung).properties(height=320)
+        try:
+            st.altair_chart(chart, width="stretch")
+        except TypeError:
+            st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        st.dataframe(df, hide_index=True, width="stretch")
+    st.caption("Weit links oben liegt eine Einheit, die mit wenig Aufwand viel "
+               "Ähnlichkeit gewinnt.")
+
+
+def _nutzwertanalyse(state, einheiten, types, features, weights):
+    """Nutzwertanalyse nach Zangemeister: gewichtete, gepolte Kriterien ergeben je
+    Einheit einen Nutzwert und damit die Reihenfolge, welche Einheit man zuerst
+    angeht. Aufwand und Kosten sind aus den Massnahmen vorbelegt, Risiko und
+    Stueckzahl gibt der Anwender ein. Kriterien sind frei ergaenzbar."""
+    import pandas as pd
+    st.subheader("Nutzwertanalyse der Einheiten")
+    st.caption("Bewerten Sie die Einheiten nach gewichteten Kriterien. Aufwand und "
+               "Kosten sind aus den Maßnahmen vorbelegt und überschreibbar, Risiko "
+               "und Stückzahl geben Sie selbst ein. Bei Aufwand, Kosten und Risiko "
+               "ist ein kleiner Wert besser, bei Stückzahl ein großer.")
+    krit = core.nwa_kriterien(state)
+
+    st.markdown("**Kriterien und Gewichte**")
+    for k in list(krit):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        richtung_txt = "klein ist besser" if k["richtung"] == "min" else "groß ist besser"
+        c1.markdown(f"**{k['name']}**  \n{richtung_txt}"
+                    f"{' · aus Maßnahmen' if k['auto'] else ''}")
+        g = c2.number_input("Gewicht", min_value=0.0, value=float(k["gewicht"]),
+                            step=5.0, key=f"nwa_g_{k['name']}",
+                            label_visibility="collapsed")
+        if g != k["gewicht"]:
+            core.nwa_set_gewicht(state, k["name"], g)
+            st.rerun()
+        if c3.button("Entfernen", key=f"nwa_del_{k['name']}"):
+            core.nwa_remove_kriterium(state, k["name"])
+            st.rerun()
+    summe = sum(k["gewicht"] for k in krit)
+    st.caption(f"Summe der Gewichte: {summe:.0f}. Sie werden intern auf 100 % "
+               "normiert, müssen sich also nicht exakt zu 100 addieren.")
+
+    c1, c2, c3 = st.columns([3, 2, 1])
+    neu_name = c1.text_input("Neues Kriterium", key="nwa_neu",
+                             label_visibility="collapsed",
+                             placeholder="Neues Kriterium")
+    neu_r = c2.selectbox("Richtung", ["min", "max"], key="nwa_neu_r",
+                         format_func=lambda r: "klein ist besser" if r == "min"
+                         else "groß ist besser", label_visibility="collapsed")
+    if c3.button("Hinzufügen", key="nwa_add") and neu_name.strip():
+        core.nwa_add_kriterium(state, neu_name, neu_r)
+        st.rerun()
+
+    st.markdown("**Bewertung je Einheit**")
+    daten = []
+    for u in einheiten:
+        zeile = {"Einheit": core.get_name(state, u)}
+        for k in krit:
+            zeile[k["name"]] = core.nwa_get_wert(state, u, k, types, features, weights)
+        daten.append(zeile)
+    df = pd.DataFrame(daten)
+    cfg = {"Einheit": st.column_config.TextColumn(disabled=True)}
+    for k in krit:
+        cfg[k["name"]] = st.column_config.NumberColumn()
+    edit = st.data_editor(df, hide_index=True, width="stretch",
+                          key=f"nwa_editor_{len(krit)}_{len(einheiten)}",
+                          column_config=cfg)
+    for i, u in enumerate(einheiten):
+        kz = core.einheit_kennzahlen(state, u, types, features, weights)
+        for k in krit:
+            wert = edit.iloc[i][k["name"]]
+            wert = float(wert) if pd.notna(wert) else 0.0
+            if k["auto"] and abs(wert - kz[k["auto"]]) < 1e-9:
+                core.nwa_set_wert(state, u, k["name"], None)
+            else:
+                core.nwa_set_wert(state, u, k["name"], wert)
+
+    unvollstaendig = []
+    for u in einheiten:
+        v = core.einheit_kennzahlen(
+            state, u, types, features, weights)["kosten_vollstaendig"]
+        if v < 1.0:
+            unvollstaendig.append(f"{core.get_name(state, u)} ({v * 100:.0f} %)")
+    if unvollstaendig:
+        st.caption("Hinweis zu den Kosten: Nicht alle Maßnahmen dieser Einheiten "
+                   "sind beziffert, die Kosten sind aus dem Durchschnitt "
+                   "hochgerechnet (Anteil bezifferter Maßnahmen in Klammern): "
+                   + ", ".join(unvollstaendig) + ". Sie können die Werte oben "
+                   "jederzeit überschreiben.")
+
+    st.markdown("**Rangfolge nach Nutzwert**")
+    nw = core.nwa_nutzwerte(state, types, features, weights)
+    erg = pd.DataFrame([{"Einheit": core.get_name(state, u), "Nutzwert": v}
+                        for u, v in nw])
+    try:
+        import altair as alt
+        chart = (alt.Chart(erg).mark_bar().encode(
+            x=alt.X("Nutzwert:Q", scale=alt.Scale(domain=[0, 1]),
+                    axis=alt.Axis(format="%")),
+            y=alt.Y("Einheit:N", sort="-x", title=None),
+            tooltip=["Einheit:N", alt.Tooltip("Nutzwert:Q", format=".1%")])
+            .properties(height=60 + 40 * len(erg)))
+        try:
+            st.altair_chart(chart, width="stretch")
+        except TypeError:
+            st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        st.dataframe(erg, hide_index=True, width="stretch")
+    if nw:
+        st.markdown(f"Zuerst angehen: **{core.get_name(state, nw[0][0])}**.")
 
 
 def _priorisierung(state, features, types, weights):
-    """Bereich 3: unternehmensweite Priorisierung ueber Portfolio und kumulative
-    Paretokurve. Gebuendelte Handlungsfelder gehen mit ihrem summierten Gewinn ein."""
-    zeilen = _uw_zeilen(state, features, types, weights)
-    if zeilen is None or not zeilen:
+    """Vierter Schritt, Teil 2: Priorisierung der Betrachtungseinheiten, also welche
+    Einheit man zuerst angeht. Ein Portfolio stellt Aufwand und Wirkung je Einheit
+    gegenueber, die Nutzwertanalyse liefert die begruendete Rangfolge."""
+    einheiten = [u for u in state["units"] if core.get_zieltyp(state, u)]
+    if not einheiten:
         return
     st.header("Priorisierung")
-    punkte = [{"label": z["merkmal"], "aufwand": z["aufwand"], "gewinn": z["gewinn"]}
-              for z in zeilen]
-    st.subheader("Aufwand-Wirkung-Portfolio")
-    _portfolio_matrix(punkte)
-    st.subheader("Kumulative Wirkung")
-    _paretokurve(punkte)
+    st.caption("Welche Betrachtungseinheit zuerst? Grundlage sind der Aufwand und "
+               "die Wirkung je Einheit sowie eine Nutzwertanalyse mit frei "
+               "gewichtbaren Kriterien.")
+    _einheiten_portfolio(state, einheiten, types, features, weights)
+    st.divider()
+    _nutzwertanalyse(state, einheiten, types, features, weights)
 
 
-def _detaillierung(state, features, types, weights):
-    """Bereich 4: Detaillierung zu Massnahmen und Verantwortlichkeiten je
-    Handlungsfeld sowie Terminierung ueber die groben Phasen. Ein zusammengelegtes
-    Handlungsfeld traegt genau eine Massnahme."""
-    zeilen = _uw_zeilen(state, features, types, weights)
-    if zeilen is None or not zeilen:
-        return
-    core.hf_phase_vorbelegen(state, zeilen)
-    st.header("Detaillierung und Terminierung")
-    st.caption("Legen Sie je Handlungsfeld eine konkrete Massnahme und eine "
-               "Verantwortlichkeit fest und ordnen Sie es einer Phase zu. Die Phase "
-               "ist aus dem Aufwand vorgeschlagen und frei anpassbar. Pruefen Sie "
-               "dabei Abhaengigkeiten zwischen den Handlungsfeldern.")
-    for z in zeilen:
-        k = core.hf_schluessel(z)
-        ks = _hf_key_str(k)
-        m = core.get_hf_massnahme(state, k)
-        einh = ", ".join(core.get_name(state, u) for u in z["einheiten"])
-        kopf = f"{z['merkmal']} → {z['soll']}  ({einh})"
-        if m["phase"]:
-            kopf += f"   ·   {m['phase']}. Phase"
-        with st.expander(kopf):
-            text = st.text_area(
-                "Massnahme", value=m["text"], key=f"{ks}_txt",
-                placeholder="Was ist konkret zu tun, um die Ziel-Auspraegung zu erreichen?",
-                height=80)
-            if text != m["text"]:
-                core.set_hf_massnahme(state, k, text=text)
-            sp_e, sp_w = st.columns(2)
-            with sp_e:
-                phasen = list(core.PHASEN)
-                aktuell = m["phase"] or core.PHASEN[-1]
-                wahl = st.selectbox(
-                    "Phase", options=phasen, index=phasen.index(aktuell),
-                    format_func=lambda p: f"{p}. Phase", key=f"{ks}_ph")
-                if wahl != m["phase"]:
-                    core.set_hf_massnahme(state, k, phase=wahl)
-            with sp_w:
-                wer = st.text_input("Verantwortlich", value=m["wer"], key=f"{ks}_wer")
-                if wer != m["wer"]:
-                    core.set_hf_massnahme(state, k, wer=wer)
+@st.dialog("Gemeinsame Werte der inhaltlichen Synergie")
+def _synergie_dialog(state, felder_menge, massnahmen):
+    """Erfasst beim Zusammenlegen verschiedener Massnahmen zu einer gemeinsamen
+    Massnahme die gemeinsamen Werte. Der Aehnlichkeitsgewinn addiert sich
+    automatisch, hier geht es nur um den gemeinsamen Aufwand sowie die gemeinsamen
+    Kosten und die Dauer. Vorschlag ist der hoechste Einzelwert."""
+    von = {m["id"]: m for m in massnahmen}
+    merkmale = []
+    for k in felder_menge:
+        if k in von:
+            merkmale.extend(von[k]["merkmale"])
+    st.markdown("**" + " + ".join(merkmale) + "**")
+    au, ks, ds = [], [], []
+    for k in felder_menge:
+        if k in von:
+            m = von[k]
+            if m["aufwand"] in core.AUFWAND_STUFEN:
+                au.append(m["aufwand"])
+            if m["kosten"] is not None:
+                ks.append(m["kosten"])
+            if m["dauer"] is not None:
+                ds.append(m["dauer"])
+    st.caption("Vorschlag ist der höchste Einzelwert der beteiligten Änderungen.")
+    stufen = list(core.AUFWAND_STUFEN)
+    v_auf = max(au) if au else None
+    idx = stufen.index(v_auf) if v_auf in stufen else None
+    aufwand = st.radio("Gemeinsamer Aufwand", stufen,
+                       format_func=lambda x: core.AUFWAND_LABEL[x],
+                       index=idx, horizontal=True)
+    kosten = st.number_input("Gemeinsame Kosten in Euro (optional)", min_value=0.0,
+                             value=(max(ks) if ks else None), step=1000.0,
+                             format="%.0f")
+    dauer = st.number_input("Gemeinsame Dauer in Wochen (optional)", min_value=0.0,
+                            value=(max(ds) if ds else None), step=1.0, format="%.0f")
+    sp1, sp2 = st.columns(2)
+    if sp1.button("Speichern", type="primary", width="stretch"):
+        core.add_synergie(state, felder_menge, aufwand, kosten, dauer)
+        st.rerun()
+    if sp2.button("Abbrechen", width="stretch"):
+        st.rerun()
 
 
 def seite_massnahmen(state, features, types, weights):
-    st.title("Konfigurator — Massnahmenplanung")
+    st.title("Konfigurator — Maßnahmenplanung")
 
     if not state["units"]:
         st.info("Keine Betrachtungseinheiten vorhanden.")
         return
 
-    st.caption("Aus dem Vergleich von Ist- und Ziel-Auspraegung des Zieltyps ergeben "
-               "sich die Abweichungen je Einheit. Sie werden unternehmensweit zu "
-               "Handlungsfeldern zusammengefuehrt, priorisiert und zu Massnahmen "
-               "ausgestaltet. Die inhaltliche Ausgestaltung erfolgt durch den "
-               "Anwender.")
+    st.caption("Die Änderungen aller Einheiten werden hier unternehmensweit "
+               "zusammengeführt, ausgestaltet und in eine sinnvolle Reihenfolge "
+               "gebracht, woraus sich der Transformationspfad ergibt. Die "
+               "inhaltliche Ausgestaltung erfolgt durch den Anwender.")
     st.divider()
 
-    # BEREICH 1: Abweichung vom Zieltyp je Einheit, reine Anzeige.
-    for uid in state["units"]:
-        typ = core.get_zieltyp(state, uid)
-        st.header(core.get_name(state, uid))
-        if not typ:
-            st.caption("Kein Zieltyp festgelegt — uebersprungen.")
-            st.divider()
-            continue
-        st.caption(f"Zieltyp: **{typ}**")
-
-        profil = types[typ]
-        felder = core.handlungsfelder(state, uid, typ, profil, features, weights)
-
-        if not felder:
-            st.success("Keine Abweichung: Der Zieltyp ist im aktuellen Zustand "
-                       "bereits erreicht.")
-        else:
-            st.subheader("Abweichung vom Zieltyp")
-            _handlungsfeld_tabelle(state, uid, felder)
-
-        nicht = core.nicht_erreichte_merkmale(state, uid, typ, profil, features)
-        if nicht:
-            with st.expander(f"Nicht erreichte Merkmale ({len(nicht)})"):
-                st.caption("Diese Merkmale begruenden, warum die erreichbare "
-                           "Ähnlichkeit unter 100 % bleibt.")
-                for m, grund in nicht:
-                    st.markdown(f"- **{m}**: {grund}")
-        st.divider()
-
-    # BEREICHE 2 bis 4: unternehmensweit. Priorisierung und Detaillierung erscheinen
-    # ab einer Einheit mit Zieltyp, die Harmonisierung erst ab zwei, da sich sonst
-    # nichts zusammenfuehren laesst.
     mit_ziel = [u for u in state["units"] if core.get_zieltyp(state, u)]
-    if mit_ziel:
-        if len(mit_ziel) >= 2:
-            _harmonisierung(state, features, types, weights)
-            st.divider()
+    if not mit_ziel:
+        st.info("Die Transformationsplanung erscheint, sobald mindestens eine "
+                "Betrachtungseinheit einen Zieltyp hat.")
+    else:
+        # Reihenfolge: 1. Harmonisierung, 2. Detaillierung, 3. Priorisierung.
+        _harmonisierung(state, features, types, weights)
+        st.divider()
         _priorisierung(state, features, types, weights)
         st.divider()
-        _detaillierung(state, features, types, weights)
-        st.divider()
-    else:
-        st.info("Die Priorisierung und Detaillierung erscheinen, sobald mindestens "
-                "eine Betrachtungseinheit einen Zieltyp hat.")
 
     st.subheader("Ergebnis exportieren")
     st.download_button(
