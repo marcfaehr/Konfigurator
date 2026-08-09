@@ -250,6 +250,18 @@ def empty_state():
         # zusammengelegt hat. Nur Paare, die bei mehreren Einheiten als Handlungsfeld
         # auftreten, sind buendelbar.
         "buendel": set(),
+        # BUENDEL_WERTE je zusammengelegter Kombination (merkmal, soll): gemeinsamer
+        # Aufwand, Kosten und Dauer, vom Anwender im Zusammenlege-Dialog erfasst.
+        # dict {(merkmal, soll): {"aufwand": int|None, "kosten": float|None,
+        # "dauer": float|None}}.
+        "buendel_werte": {},
+        # SYNERGIEN: frei gebildete inhaltliche Zusammenlegungen verschiedener
+        # Handlungsfelder zu einer gemeinsamen Massnahme. Liste von dicts mit
+        # "felder" (frozenset von hf_schluessel), "aufwand", "kosten", "dauer".
+        "synergien": [],
+        # ABHAENGIGKEITEN: zwingende Reihenfolge zwischen Massnahmen als Menge von
+        # (vorher_id, nachher_id). Die erste Massnahme muss vor der zweiten liegen.
+        "abhaengigkeiten": set(),
         # HF_MASSNAHMEN: Massnahmen der unternehmensweiten Handlungsfelder, je
         # Handlungsfeld ueber einen Schluessel (siehe hf_schluessel) statt je Einheit.
         "hf_massnahmen": {},
@@ -1209,24 +1221,43 @@ def handlungsfelder(state, uid, typ_name, typ_profil, features, weights=None):
     return felder
 
 
+EXAKT_GRENZE = 18   # bis so viele bezifferte Handlungsfelder je Typ exakt rechnen
+
+
+def _pareto_filter(punkte):
+    """Behaelt aus (kosten, gewinn, merkmale)-Punkten nur die nicht dominierten:
+    aufsteigend nach Kosten sortiert, streng steigender Gewinn."""
+    punkte.sort(key=lambda p: (p[0], -p[1]))
+    front, best = [], -1.0
+    for k, g, ms in punkte:
+        if g > best + 1e-12:
+            front.append((k, g, ms))
+            best = g
+    return front
+
+
 def budgetkurve(state, uid, typ_name, typ_profil, features, weights=None):
-    """Datenpunkte der Budgetkurve fuer EINEN Typ: erreichbare Ziel-Aehnlichkeit
-    ueber dem kumulierten Budget. Grundlage sind die Handlungsfelder mit erfasster
-    Kostenschaetzung, geordnet nach Aehnlichkeitsgewinn je Euro (guenstigste
-    zuerst). Handlungsfelder ohne Kosten fliessen NICHT in die Kurve ein, weil sie
-    keinen planbaren Budgetbedarf haben; sie werden gesondert zurueckgegeben und
-    deckeln die planbare Kurve.
+    """Datenpunkte der Budgetkurve fuer EINEN Typ: die exakt hoechste erreichbare
+    Ziel-Aehnlichkeit ueber dem Budget. Grundlage sind die Handlungsfelder mit
+    erfasster Kostenschaetzung. Berechnet wird die Effizienzgrenze (Pareto-Front)
+    ueber alle Kombinationen, sodass zu jedem Budget die tatsaechlich beste Auswahl
+    gezeigt wird. Bis EXAKT_GRENZE bezifferte Handlungsfelder geschieht das exakt per
+    dynamischer Programmierung; darueber (oder wenn die Front zu gross wird) greift
+    die gierige Naeherung nach Gewinn je Euro, damit die Rechenzeit beschraenkt
+    bleibt. Handlungsfelder ohne Kosten fliessen nicht in die Kurve ein und deckeln
+    sie.
 
     Rueckgabe (dict):
-      basis         Aehnlichkeit ohne jede Aenderung (Budget 0), = Stufe 0,
-      punkte        Liste (budget, aehnlichkeit), budget kumuliert, fuer die
-                    Treppe (der erste Punkt ist (0, basis)),
+      basis         Aehnlichkeit ohne jede Aenderung (Budget 0),
+      punkte        Liste (budget, aehnlichkeit, merkmale) der Effizienzgrenze;
+                    merkmale ist das Tupel der in dieser Auswahl enthaltenen
+                    Merkmale (leer beim Basispunkt),
       deckel        Aehnlichkeit, wenn alle bezifferten Handlungsfelder umgesetzt
-                    sind (Endpunkt der planbaren Kurve),
-      unbeziffert   Liste der Handlungsfelder ohne Kosten (dicts wie in
-                    handlungsfelder),
+                    sind,
+      unbeziffert   Liste der Handlungsfelder ohne Kosten,
       gewinn_offen  Summe der Gewinne der unbezifferten Handlungsfelder,
-      max_gesamt    deckel + gewinn_offen (theoretisch voll erreichbar).
+      max_gesamt    deckel + gewinn_offen,
+      exakt         True, wenn die Kurve exakt gerechnet wurde, sonst False.
     """
     felder = handlungsfelder(state, uid, typ_name, typ_profil, features, weights)
     score = soll_score_gestaffelt(state, uid, typ_name, typ_profil, features, weights)
@@ -1239,32 +1270,50 @@ def budgetkurve(state, uid, typ_name, typ_profil, features, weights=None):
             ohne_kosten.append(f)
         else:
             mit_kosten.append((k, f))
-    # Guenstigste zuerst: hoher Gewinn je Euro oben. Kosten 0 (falls je erfasst)
-    # ans Ende, um Division durch Null zu vermeiden.
-    mit_kosten.sort(key=lambda kf: (kf[1]["gewinn"] / kf[0]) if kf[0] > 0 else -1.0,
-                    reverse=True)
 
-    # Punkte als (budget, aehnlichkeit, merkmal). Der erste Punkt ist die Basis
-    # ohne Aenderung (merkmal None); jeder weitere Sprung gehoert zu genau einem
-    # Merkmal, das an dieser Stelle hinzugenommen wird.
-    punkte = [(0.0, basis, None)]
-    budget, aehn = 0.0, basis
-    for k, f in mit_kosten:
-        budget += k
-        aehn += f["gewinn"]
-        punkte.append((budget, aehn, f["merkmal"]))
+    def _exakte_front():
+        # Pareto-Front per DP: jede (kosten, gewinn, merkmale)-Kombination, nach
+        # jedem Handlungsfeld auf die nicht dominierten Punkte reduziert.
+        front = [(0.0, 0.0, ())]
+        for k, f in mit_kosten:
+            erweitert = []
+            for kk, gg, ms in front:
+                erweitert.append((kk, gg, ms))
+                erweitert.append((kk + k, gg + f["gewinn"], ms + (f["merkmal"],)))
+            front = _pareto_filter(erweitert)
+            if len(front) > 200000:      # Sicherheitsgrenze -> Naeherung
+                return None
+        front.sort()
+        return front
+
+    front = _exakte_front() if len(mit_kosten) <= EXAKT_GRENZE else None
+    exakt = front is not None
+    if exakt:
+        punkte = [(kk, basis + gg, ms) for kk, gg, ms in front]
+        deckel = basis + sum(f["gewinn"] for _, f in mit_kosten)
+    else:
+        mit_kosten.sort(
+            key=lambda kf: (kf[1]["gewinn"] / kf[0]) if kf[0] > 0 else -1.0,
+            reverse=True)
+        punkte = [(0.0, basis, ())]
+        budget, aehn, ms = 0.0, basis, ()
+        for k, f in mit_kosten:
+            budget += k
+            aehn += f["gewinn"]
+            ms = ms + (f["merkmal"],)
+            punkte.append((budget, aehn, ms))
+        deckel = aehn
 
     gewinn_offen = sum(f["gewinn"] for f in ohne_kosten)
     return {
         "basis": basis,
         "punkte": punkte,
-        "deckel": aehn,
+        "deckel": deckel,
         "unbeziffert": ohne_kosten,
         "gewinn_offen": gewinn_offen,
-        "max_gesamt": aehn + gewinn_offen,
+        "max_gesamt": deckel + gewinn_offen,
+        "exakt": exakt,
     }
-
-
 def budget_optimum(state, uid, typ_name, typ_profil, features, weights, budget):
     """Exakte Loesung des Auswahlproblems (Rucksack) fuer EINEN Typ: waehlt aus den
     Merkmalen mit erfasster Kostenschaetzung die Kombination, die das Budget nicht
@@ -1397,8 +1446,336 @@ def toggle_buendel(state, merkmal, soll):
     schluessel = (merkmal, soll)
     if schluessel in b:
         b.discard(schluessel)
+        state.get("buendel_werte", {}).pop(schluessel, None)
     else:
         b.add(schluessel)
+
+
+def set_buendel_werte(state, merkmal, soll, aufwand, kosten, dauer):
+    """Speichert die gemeinsamen Werte einer zusammengelegten Kombination. Kosten
+    und Dauer duerfen None sein, der Aufwand ist die gemeinsame Stufe."""
+    state.setdefault("buendel_werte", {})[(merkmal, soll)] = {
+        "aufwand": aufwand,
+        "kosten": None if kosten is None else float(kosten),
+        "dauer": None if dauer is None else float(dauer),
+    }
+
+
+def get_buendel_werte(state, merkmal, soll):
+    """Gemeinsame Werte einer Zusammenlegung (dict mit aufwand/kosten/dauer) oder
+    None, wenn noch keine erfasst wurden."""
+    return state.get("buendel_werte", {}).get((merkmal, soll))
+
+
+def einzelwerte(state, einheiten, merkmal):
+    """Sammelt die erfassten Aufwaende, Kosten und Dauern der beteiligten Einheiten
+    fuer ein Merkmal (jeweils bezogen auf den Zieltyp der Einheit)."""
+    au, ks, ds = [], [], []
+    for uid in einheiten:
+        typ = get_zieltyp(state, uid)
+        a = get_aufwand(state, uid, typ, merkmal)
+        k = get_kosten(state, uid, typ, merkmal)
+        d = get_dauer(state, uid, typ, merkmal)
+        if a in AUFWAND_STUFEN:
+            au.append(a)
+        if k is not None:
+            ks.append(k)
+        if d is not None:
+            ds.append(d)
+    return au, ks, ds
+
+
+def zeile_werte(state, zeile):
+    """Aufwand, Kosten und Dauer einer unternehmensweiten Zeile. Bei einer
+    Zusammenlegung mit erfassten gemeinsamen Werten diese, sonst der Aufwand aus der
+    Zeile und der hoechste Kosten- bzw. Dauerwert der beteiligten Einheiten. None,
+    wo nichts vorliegt."""
+    if zeile.get("gebuendelt"):
+        bw = get_buendel_werte(state, zeile["merkmal"], zeile["soll"])
+        if bw:
+            return bw.get("aufwand"), bw.get("kosten"), bw.get("dauer")
+    _, ks, ds = einzelwerte(state, zeile["einheiten"], zeile["merkmal"])
+    return zeile["aufwand"], (max(ks) if ks else None), (max(ds) if ds else None)
+
+
+def synergie_gruppen(state):
+    """Liste der inhaltlichen Synergien. Jede Gruppe ist ein dict mit 'felder'
+    (frozenset von Handlungsfeld-Schluesseln), 'aufwand', 'kosten' und 'dauer'."""
+    return state.setdefault("synergien", [])
+
+
+def synergie_von(state, schluessel):
+    """Die Synergie-Gruppe, die einen Handlungsfeld-Schluessel enthaelt, sonst
+    None. Ein Handlungsfeld gehoert zu hoechstens einer Synergie."""
+    for g in state.get("synergien", []):
+        if schluessel in g["felder"]:
+            return g
+    return None
+
+
+def add_synergie(state, schluessel_menge, aufwand, kosten, dauer):
+    """Legt eine neue inhaltliche Synergie aus mehreren Handlungsfeld-Schluesseln
+    an, mit gemeinsamem Aufwand sowie optionalen gemeinsamen Kosten und Dauer."""
+    state.setdefault("synergien", []).append({
+        "felder": frozenset(schluessel_menge),
+        "aufwand": aufwand,
+        "kosten": None if kosten is None else float(kosten),
+        "dauer": None if dauer is None else float(dauer),
+    })
+
+
+def remove_synergie(state, index):
+    """Loest die Synergie-Gruppe an der gegebenen Position wieder auf."""
+    g = state.get("synergien", [])
+    if 0 <= index < len(g):
+        g.pop(index)
+
+
+def remove_synergie_by_id(state, mid):
+    """Loest die Synergie auf, deren Feldmenge der gegebenen id (frozenset)
+    entspricht. Nutzt man, wenn die Synergie ueber ihre Massnahmen-id angesprochen
+    wird statt ueber ihre Position."""
+    g = state.get("synergien", [])
+    for i, gr in enumerate(g):
+        if gr["felder"] == mid:
+            g.pop(i)
+            return
+
+
+def massnahmen_liste(state, types, features, weights=None):
+    """Bildet aus den unternehmensweiten Zeilen und den inhaltlichen Synergien die
+    endgueltigen Massnahmen. Eine Zeile ohne Synergie ist eine eigene Massnahme,
+    eine Synergie fasst mehrere Zeilen zu einer Massnahme zusammen (Gewinn summiert,
+    Aufwand/Kosten/Dauer aus den gemeinsamen Werten der Synergie).
+
+    Jede Massnahme ist ein dict mit: id (hashbar), merkmale (Liste), einheiten
+    (Liste von uids), gewinn (Anteil, ggf. summiert), aufwand, kosten, dauer,
+    ist_synergie (bool). Reihenfolge: erst Synergien, dann uebrige Zeilen in
+    Zeilenreihenfolge.
+    """
+    zeilen = unternehmensweite_uebersicht(state, types, features, weights)
+    per_key = {hf_schluessel(z): z for z in zeilen}
+
+    massnahmen, vergeben = [], set()
+    for g in state.get("synergien", []):
+        felder = [k for k in g["felder"] if k in per_key]
+        if len(felder) < 2:
+            continue
+        vergeben.update(felder)
+        zs = [per_key[k] for k in felder]
+        einheiten = []
+        for z in zs:
+            einheiten.extend(z["einheiten"])
+        massnahmen.append({
+            "id": frozenset(felder),
+            "merkmale": [z["merkmal"] for z in zs],
+            "ziele": [z["soll"] for z in zs],
+            "ist_texte": ["/".join(sorted(set(str(x) for x in z["ist_werte"])))
+                          for z in zs],
+            "einheiten": list(dict.fromkeys(einheiten)),
+            "gewinn": sum(z["gewinn"] for z in zs),
+            "aufwand": g.get("aufwand"),
+            "kosten": g.get("kosten"),
+            "dauer": g.get("dauer"),
+            "ist_synergie": True,
+        })
+    for k, z in per_key.items():
+        if k in vergeben:
+            continue
+        aufw, kosten, dauer = zeile_werte(state, z)
+        massnahmen.append({
+            "id": k,
+            "merkmale": [z["merkmal"]],
+            "ziele": [z["soll"]],
+            "ist_texte": ["/".join(sorted(set(str(x) for x in z["ist_werte"])))],
+            "einheiten": list(z["einheiten"]),
+            "gewinn": z["gewinn"],
+            "aufwand": aufw,
+            "kosten": kosten,
+            "dauer": dauer,
+            "ist_synergie": False,
+        })
+    return massnahmen
+
+
+def abhaengigkeiten(state):
+    """Menge der zwingenden Abhaengigkeiten als (vorher_id, nachher_id): die erste
+    Massnahme muss vor der zweiten umgesetzt werden."""
+    return state.setdefault("abhaengigkeiten", set())
+
+
+def set_abhaengigkeit(state, vorher, nachher):
+    """Legt fest, dass die Massnahme 'vorher' zwingend vor 'nachher' liegt. Die
+    Gegenrichtung wird entfernt, damit ein Paar nicht widerspruechlich wird."""
+    a = state.setdefault("abhaengigkeiten", set())
+    a.discard((nachher, vorher))
+    a.add((vorher, nachher))
+
+
+def clear_abhaengigkeit(state, a_id, b_id):
+    """Entfernt beide Richtungen einer Abhaengigkeit zwischen zwei Massnahmen."""
+    a = state.setdefault("abhaengigkeiten", set())
+    a.discard((a_id, b_id))
+    a.discard((b_id, a_id))
+
+
+def abhaengigkeit_status(state, a_id, b_id):
+    """Status des geordneten Paars (a, b): 'a_vor_b', 'b_vor_a' oder 'keine'."""
+    a = state.get("abhaengigkeiten", set())
+    if (a_id, b_id) in a:
+        return "a_vor_b"
+    if (b_id, a_id) in a:
+        return "b_vor_a"
+    return "keine"
+
+
+def vorgaenger(state, mid, gueltige_ids):
+    """Menge der Massnahmen-ids, die zwingend vor 'mid' liegen muessen und in der
+    Menge der aktuell gueltigen ids enthalten sind (nicht mehr existierende
+    Massnahmen werden ignoriert)."""
+    return {v for (v, n) in state.get("abhaengigkeiten", set())
+            if n == mid and v in gueltige_ids}
+
+
+def einheit_kennzahlen(state, uid, types, features, weights=None):
+    """Aufwand, Kosten, Dauer und Aehnlichkeitsgewinn je Einheit als Grundlage der
+    Einheiten-Priorisierung. Aufwand, Kosten und Dauer werden aus den Massnahmen
+    abgeleitet, damit Zusammenlegungen wirken: eine gemeinsame Massnahme wird den
+    beteiligten Einheiten zu gleichen Teilen zugerechnet (Wert geteilt durch die
+    Zahl der Einheiten). Fehlende Kosten oder Dauern werden nicht als 0 gewertet,
+    sondern aus dem Durchschnitt der bezifferten Massnahmen der Einheit auf deren
+    Gesamtzahl hochgerechnet, damit gut dokumentierte Einheiten nicht benachteiligt
+    werden. Der Ähnlichkeitsgewinn bleibt einheitenspezifisch (Summe der
+    Handlungsfelder), weil er von der Zusammenlegung unberuehrt bleibt. Zusaetzlich
+    wird 'kosten_vollstaendig' als Anteil bezifferter Massnahmen zurueckgegeben."""
+    typ = get_zieltyp(state, uid)
+    if not typ:
+        return {"aufwand": 0.0, "kosten": 0.0, "dauer": 0.0, "gewinn": 0.0,
+                "kosten_vollstaendig": 1.0}
+    gewinn = float(sum(f["gewinn"] for f in
+                       handlungsfelder(state, uid, typ, types[typ], features, weights)))
+
+    eigene = [m for m in massnahmen_liste(state, types, features, weights)
+              if uid in m["einheiten"]]
+    aufwand = n_gew = 0.0
+    kosten_bez = k_gew = 0.0
+    dauer_bez = d_gew = 0.0
+    for m in eigene:
+        anteil = 1.0 / len(m["einheiten"])
+        n_gew += anteil
+        aufwand += (m["aufwand"] or 0) * anteil
+        if m["kosten"] is not None:
+            kosten_bez += m["kosten"] * anteil
+            k_gew += anteil
+        if m["dauer"] is not None:
+            dauer_bez += m["dauer"] * anteil
+            d_gew += anteil
+    kosten = kosten_bez * (n_gew / k_gew) if k_gew > 0 else 0.0
+    dauer = dauer_bez * (n_gew / d_gew) if d_gew > 0 else 0.0
+    return {
+        "aufwand": aufwand,
+        "kosten": kosten,
+        "dauer": dauer,
+        "gewinn": gewinn,
+        "kosten_vollstaendig": (k_gew / n_gew) if n_gew > 0 else 1.0,
+    }
+
+
+# Standard-Kriterien der Nutzwertanalyse. 'richtung' min bedeutet: kleiner ist
+# besser (frueher angehen); 'auto' verweist auf eine abgeleitete Kennzahl.
+NWA_STANDARD = [
+    {"name": "Aufwand", "gewicht": 25.0, "richtung": "min", "auto": "aufwand"},
+    {"name": "Kosten", "gewicht": 25.0, "richtung": "min", "auto": "kosten"},
+    {"name": "Risiko", "gewicht": 25.0, "richtung": "min", "auto": None},
+    {"name": "Stückzahl", "gewicht": 25.0, "richtung": "max", "auto": None},
+]
+
+
+def nwa_kriterien(state):
+    """Liste der Nutzwert-Kriterien, beim ersten Zugriff mit den Standard-Kriterien
+    vorbelegt. Jedes Kriterium: name, gewicht, richtung ('min'/'max'), auto."""
+    if "nwa_kriterien" not in state:
+        state["nwa_kriterien"] = [dict(k) for k in NWA_STANDARD]
+    return state["nwa_kriterien"]
+
+
+def nwa_add_kriterium(state, name, richtung="min"):
+    """Fuegt ein eigenes Kriterium hinzu (manuell zu bewerten, Startgewicht 0)."""
+    name = (name or "").strip()
+    if not name or any(k["name"] == name for k in nwa_kriterien(state)):
+        return
+    nwa_kriterien(state).append(
+        {"name": name, "gewicht": 0.0, "richtung": richtung, "auto": None})
+
+
+def nwa_remove_kriterium(state, name):
+    """Entfernt ein Kriterium und die zugehoerigen manuellen Bewertungen."""
+    state["nwa_kriterien"] = [k for k in nwa_kriterien(state) if k["name"] != name]
+    w = state.get("nwa_werte", {})
+    for key in [k for k in w if k[1] == name]:
+        w.pop(key, None)
+
+
+def nwa_set_gewicht(state, name, gewicht):
+    for k in nwa_kriterien(state):
+        if k["name"] == name:
+            k["gewicht"] = float(gewicht)
+
+
+def nwa_set_richtung(state, name, richtung):
+    for k in nwa_kriterien(state):
+        if k["name"] == name:
+            k["richtung"] = richtung
+
+
+def nwa_set_wert(state, uid, name, wert):
+    """Setzt die manuelle (oder ueberschriebene) Bewertung einer Einheit fuer ein
+    Kriterium. None loescht die manuelle Angabe (dann gilt wieder der auto-Wert)."""
+    w = state.setdefault("nwa_werte", {})
+    if wert is None:
+        w.pop((uid, name), None)
+    else:
+        w[(uid, name)] = float(wert)
+
+
+def nwa_get_wert(state, uid, kriterium, types, features, weights=None):
+    """Rohwert einer Einheit fuer ein Kriterium: die manuelle Bewertung, sonst der
+    abgeleitete auto-Wert (Aufwand/Kosten aus den Kennzahlen), sonst 0."""
+    manuell = state.get("nwa_werte", {}).get((uid, kriterium["name"]))
+    if manuell is not None:
+        return manuell
+    if kriterium["auto"]:
+        return einheit_kennzahlen(state, uid, types, features, weights)[
+            kriterium["auto"]]
+    return 0.0
+
+
+def nwa_nutzwerte(state, types, features, weights=None):
+    """Nutzwert je Einheit nach Zangemeister: je Kriterium werden die Rohwerte ueber
+    die Einheiten min-max-normiert und gepolt (bei richtung 'min' ist klein besser),
+    mit dem normierten Gewicht multipliziert und summiert. Rueckgabe: Liste
+    (uid, nutzwert), absteigend nach Nutzwert. Sind alle Werte eines Kriteriums
+    gleich, traegt es fuer alle Einheiten gleich bei."""
+    einheiten = [u for u in state["units"] if get_zieltyp(state, u)]
+    if not einheiten:
+        return []
+    krit = nwa_kriterien(state)
+    gew_summe = sum(k["gewicht"] for k in krit) or 1.0
+    nutz = {u: 0.0 for u in einheiten}
+    for k in krit:
+        werte = {u: nwa_get_wert(state, u, k, types, features, weights)
+                 for u in einheiten}
+        lo, hi = min(werte.values()), max(werte.values())
+        spanne = hi - lo
+        for u in einheiten:
+            if spanne == 0:
+                norm = 1.0
+            elif k["richtung"] == "min":
+                norm = (hi - werte[u]) / spanne
+            else:
+                norm = (werte[u] - lo) / spanne
+            nutz[u] += (k["gewicht"] / gew_summe) * norm
+    return sorted(nutz.items(), key=lambda x: x[1], reverse=True)
 
 
 def unternehmensweite_uebersicht(state, types, features, weights=None):
@@ -1458,20 +1835,23 @@ def hf_schluessel(zeile):
 def get_hf_massnahme(state, schluessel):
     """Massnahme eines unternehmensweiten Handlungsfeldes: dict mit text, phase, wer."""
     m = state.setdefault("hf_massnahmen", {})
-    return m.get(schluessel, {"text": "", "phase": None, "wer": ""})
+    return m.get(schluessel, {"text": "", "phase": None, "wer": "", "voraussetzung": ""})
 
 
-def set_hf_massnahme(state, schluessel, text=None, phase=None, wer=None):
-    """Setzt Text, Phase oder Verantwortlichkeit eines unternehmensweiten
-    Handlungsfeldes. Nur uebergebene Felder werden geaendert."""
+def set_hf_massnahme(state, schluessel, text=None, phase=None, wer=None,
+                     voraussetzung=None):
+    """Setzt Text, Phase, Verantwortlichkeit oder Voraussetzung eines
+    unternehmensweiten Handlungsfeldes. Nur uebergebene Felder werden geaendert."""
     m = state.setdefault("hf_massnahmen", {})
-    e = m.setdefault(schluessel, {"text": "", "phase": None, "wer": ""})
+    e = m.setdefault(schluessel, {"text": "", "phase": None, "wer": "", "voraussetzung": ""})
     if text is not None:
         e["text"] = text
     if phase is not None:
         e["phase"] = phase
     if wer is not None:
         e["wer"] = wer
+    if voraussetzung is not None:
+        e["voraussetzung"] = voraussetzung
 
 
 def hf_phase_vorbelegen(state, zeilen):
