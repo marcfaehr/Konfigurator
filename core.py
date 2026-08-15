@@ -967,7 +967,7 @@ AUFWAND_KEIN = 0
 AUFWAND_STUFEN_K = (AUFWAND_KEIN, AUFWAND_GERING, AUFWAND_MITTEL, AUFWAND_HOCH)
 AUFWAND_LABEL = {AUFWAND_GERING: "gering", AUFWAND_MITTEL: "mittel", AUFWAND_HOCH: "hoch"}
 
-# Phasen der Maßnahmenplanung. Sie werden anfangs aus dem Aufwand vorgeschlagen,
+# Phasen der Konsolidierung. Sie werden anfangs aus dem Aufwand vorgeschlagen,
 # sind danach aber frei gebildet und daher als eigene Groesse gefuehrt. Die Werte
 # stimmen zahlenmaessig mit den Aufwandsstufen ueberein, tragen aber keine
 # Aufwandsbedeutung mehr.
@@ -1172,7 +1172,7 @@ def merkmal_status(auswahl, potential_unit, ausschluss_unit, typ_profil, merkmal
     return STATUS_OFFEN
 
 
-# ====================================================== Schritt 4: Massnahmenplanung
+# ======================================================= Schritt 4: Konsolidierung
 # Die Handlungsfelder ergeben sich unmittelbar aus dem Vergleich von Ist- und
 # Soll-Ausprägung des festgelegten Zieltyps. Der Anwender ergaenzt lediglich die
 # konkrete Massnahme, die Phase und die Verantwortlichkeit.
@@ -1683,11 +1683,17 @@ def einheit_kennzahlen(state, uid, types, features, weights=None):
 
 # Standard-Kriterien der Nutzwertanalyse. 'richtung' min bedeutet: kleiner ist
 # besser (frueher angehen); 'auto' verweist auf eine abgeleitete Kennzahl.
+NWA_STANDARDGEWICHT = 25.0   # Startgewicht jedes Kriteriums, auch neu angelegter
+
 NWA_STANDARD = [
-    {"name": "Aufwand", "gewicht": 25.0, "richtung": "min", "auto": "aufwand"},
-    {"name": "Kosten", "gewicht": 25.0, "richtung": "min", "auto": "kosten"},
-    {"name": "Risiko", "gewicht": 25.0, "richtung": "min", "auto": None},
-    {"name": "Stückzahl", "gewicht": 25.0, "richtung": "max", "auto": None},
+    {"name": "Aufwand", "gewicht": NWA_STANDARDGEWICHT, "richtung": "min",
+     "auto": "aufwand"},
+    {"name": "Kosten", "gewicht": NWA_STANDARDGEWICHT, "richtung": "min",
+     "auto": "kosten"},
+    {"name": "Risiko", "gewicht": NWA_STANDARDGEWICHT, "richtung": "min",
+     "auto": None},
+    {"name": "Stückzahl", "gewicht": NWA_STANDARDGEWICHT, "richtung": "max",
+     "auto": None},
 ]
 
 
@@ -1700,12 +1706,15 @@ def nwa_kriterien(state):
 
 
 def nwa_add_kriterium(state, name, richtung="min"):
-    """Fuegt ein eigenes Kriterium hinzu (manuell zu bewerten, Startgewicht 0)."""
+    """Fuegt ein eigenes Kriterium hinzu. Es ist manuell zu bewerten und startet mit
+    demselben Gewicht wie die Standard-Kriterien, damit es von Beginn an
+    gleichrangig eingeht. Das Gewicht laesst sich anschliessend anpassen."""
     name = (name or "").strip()
     if not name or any(k["name"] == name for k in nwa_kriterien(state)):
         return
     nwa_kriterien(state).append(
-        {"name": name, "gewicht": 0.0, "richtung": richtung, "auto": None})
+        {"name": name, "gewicht": NWA_STANDARDGEWICHT, "richtung": richtung,
+         "auto": None})
 
 
 def nwa_remove_kriterium(state, name):
@@ -1820,7 +1829,7 @@ def unternehmensweite_uebersicht(state, types, features, weights=None):
     return zeilen
 
 
-# Maßnahmen der unternehmensweiten Ebene. Ein Handlungsfeld wird hier eindeutig
+# Änderungen der unternehmensweiten Ebene. Ein Handlungsfeld wird hier eindeutig
 # ueber einen Schluessel angesprochen, damit ein zusammengelegtes Vorhaben genau
 # eine Massnahme traegt und nicht je Einheit eine eigene.
 def hf_schluessel(zeile):
