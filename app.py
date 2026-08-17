@@ -57,17 +57,17 @@ def merkmal_tabelle(state, features, merkmal, weights):
             spalte.caption(core.get_name(state, uid))
 
         if st.session_state.get("warte_bestaetigung") == uid:
-            spalte.caption("⚠ loeschen?")
-            if spalte.button("Loeschen", key=f"ok_{uid}_{merkmal}", type="tertiary",
-                             help=f"{core.get_name(state, uid)} endgueltig loeschen", width="stretch"):
+            spalte.caption("⚠ löschen?")
+            if spalte.button("Löschen", key=f"ok_{uid}_{merkmal}", type="tertiary",
+                             help=f"{core.get_name(state, uid)} endgültig löschen", width="stretch"):
                 st.session_state.zu_loeschen = uid
                 st.rerun()
             if spalte.button("Abbrechen", key=f"no_{uid}_{merkmal}", type="tertiary",
-                             help="Loeschen abbrechen", width="stretch"):
+                             help="Löschen abbrechen", width="stretch"):
                 st.session_state.pop("warte_bestaetigung", None)
                 st.rerun()
         else:
-            if spalte.button("🗑", key=f"del_{uid}_{merkmal}", help=f"{core.get_name(state, uid)} loeschen"):
+            if spalte.button("🗑", key=f"del_{uid}_{merkmal}", help=f"{core.get_name(state, uid)} löschen"):
                 st.session_state.warte_bestaetigung = uid
                 st.rerun()
 
@@ -103,7 +103,6 @@ def _umbenennen_dialog(state, uid):
     aktuell = state.get("namen", {}).get(uid, "")
     neuer = st.text_input("Name der Betrachtungseinheit", value=aktuell,
                           placeholder="z. B. Werk Nord")
-    st.caption(f"Interne Kennung bleibt: {uid}")
     links, rechts = st.columns(2)
     if links.button("Speichern", type="primary", width="stretch"):
         core.set_name(state, uid, neuer)
@@ -121,15 +120,6 @@ def erfassung_tabelle(state, features, merkmal, weights):
       - Ist-unbekannt: Klick schaltet Ausschluss an/aus (beliebig viele)."""
     optionen = features[merkmal]
 
-    # Gewicht klein anzeigen.
-    if weights is not None:
-        g = weights.get(merkmal)
-        if g is not None:
-            g_text = str(int(g)) if float(g).is_integer() else str(g)
-            st.caption(f"Gewicht: {g_text}")
-    else:
-        st.caption("ungewichtet (alle Merkmale gleich)")
-
     # Textspalte + je Einheit eine Spalte + Anlege-Spalte.
     breiten = [4] + [2] * len(state["units"]) + [1]
 
@@ -142,11 +132,11 @@ def erfassung_tabelle(state, features, merkmal, weights):
             spalte.markdown(f"**{core.get_name(state, uid)}**  ⚠")
             c1, c2 = spalte.columns(2)
             if c1.button("Ja", key=f"ok_{uid}_{merkmal}", type="tertiary",
-                         help=f"{core.get_name(state, uid)} endgueltig loeschen", width="stretch"):
+                         help=f"{core.get_name(state, uid)} endgültig löschen", width="stretch"):
                 st.session_state.zu_loeschen = uid
                 st.rerun()
             if c2.button("Nein", key=f"no_{uid}_{merkmal}", type="tertiary",
-                         help="Loeschen abbrechen", width="stretch"):
+                         help="Löschen abbrechen", width="stretch"):
                 st.session_state.pop("warte_bestaetigung", None)
                 st.rerun()
         else:
@@ -156,7 +146,7 @@ def erfassung_tabelle(state, features, merkmal, weights):
                             help=f"{core.get_name(state, uid)} umbenennen"):
                 _umbenennen_dialog(state, uid)
             if k_del.button("🗑", key=f"del_{uid}_{merkmal}",
-                            help=f"{core.get_name(state, uid)} loeschen"):
+                            help=f"{core.get_name(state, uid)} löschen"):
                 st.session_state.warte_bestaetigung = uid
                 st.rerun()
 
@@ -167,18 +157,18 @@ def erfassung_tabelle(state, features, merkmal, weights):
 
     # Welt-Dropdown je Einheit.
     weltzeile = st.columns(breiten)
-    weltzeile[0].caption("Weiss ich das Ist?")
+    weltzeile[0].caption("Ausprägungen:")
     welt_labels = {core.WELT_IST_BEKANNT: "Ist bekannt",
                    core.WELT_IST_UNBEKANNT: "Ist unbekannt"}
     for i, uid in enumerate(state["units"]):
         akt = core.get_welt(state, uid, merkmal)
         wahl = weltzeile[1 + i].selectbox(
-            f"Welt {uid} {merkmal}",
+            "Bekannt?",
             options=[core.WELT_IST_BEKANNT, core.WELT_IST_UNBEKANNT],
             index=0 if akt == core.WELT_IST_BEKANNT else 1,
             format_func=lambda w: welt_labels[w],
             key=f"welt_{uid}_{merkmal}",
-            label_visibility="collapsed",
+            help="Ist für dieses Merkmal die aktuelle Ausprägung bekannt?",
         )
         if wahl != akt:
             core.set_welt(state, uid, merkmal, wahl)
@@ -193,14 +183,19 @@ def erfassung_tabelle(state, features, merkmal, weights):
             zustand = core.get_zellzustand(state, uid, merkmal, opt)
             welt = core.get_welt(state, uid, merkmal)
             label, typ = _erfassung_knopf(zustand)
+            # Der Hinweis richtet sich danach, was der Klick bewirken wuerde.
             if welt == core.WELT_IST_UNBEKANNT:
-                hilfe = "Ausschluss an/aus"
+                hilfe = ("Ausschluss (Klick setzt Ausschluss zurück)"
+                         if zustand == core.ZELLE_AUSSCHLUSS
+                         else "Als Ausschluss markieren")
             elif core.get_choice(state, uid, merkmal) is core.OFFEN:
                 hilfe = "Als Ist markieren"
             elif zustand == core.ZELLE_IST:
-                hilfe = "Ist (Klick setzt Merkmal zurueck)"
+                hilfe = "Ist (Klick setzt Merkmal zurück)"
+            elif zustand == core.ZELLE_POTENTIAL:
+                hilfe = "Potenzial (Klick setzt Potenzial zurück)"
             else:
-                hilfe = "Potenzial an/aus"
+                hilfe = "Als Potenzial markieren"
             if zeile[1 + i].button(label, key=f"z_{uid}_{merkmal}_{opt}",
                                    type=typ, width="stretch", help=hilfe):
                 core.klick_erfassung(state, uid, merkmal, opt)
@@ -302,8 +297,9 @@ sich einheitlich beschreiben lässt. Sinnvoll sind Bereiche, die es real gibt un
 die sich in ihrer Auftragsabwicklung erkennbar unterscheiden. Über ✏ benennen Sie
 eine Betrachtungseinheit um, über 🗑 löschen Sie sie.*
 
-*Bsp: eine Serienfertigung von Antriebskomponenten und daneben eine
-Sondermaschinenfertigung.*
+*Bsp: eine Serienfertigung von Antriebskomponenten als erste
+Betrachtungseinheit und eine Sondermaschinenfertigung als zweite
+Betrachtungseinheit.*
 
 **2. Entscheiden Sie je Merkmal zuerst, ob Sie die aktuelle Ausprägung kennen.**
 
@@ -328,12 +324,12 @@ sofern sie einem real abgrenzbaren Bereich entspricht, andernfalls wählen Sie d
 überwiegend zutreffende Ausprägung.
 
 >>**2.2 Ausprägung unbekannt.** Wählen Sie im Auswahlfeld
-*Ist unbekannt*. Die Angabe von Ist- und Potenzial-Ausprägungen entfällt dadurch.
+*Ist unbekannt*. Die Angabe von Ist- und Potenzial-Ausprägungen entfällt dadurch,
+Sie können jedoch Ausprägungen ausschließen.
 
 >>*Ausschluss ⛔: eine Ausprägung, die für diese
-Betrachtungseinheit nicht in Frage kommt. Der Klick schaltet den Ausschluss an und
-aus, mehrere sind möglich, und die Angabe ist freiwillig. Was Sie nicht
-ausschließen, bleibt als Spielraum erhalten.*
+Betrachtungseinheit nicht in Frage kommt. Mehrere sind möglich, und die Angabe ist
+freiwillig. Was Sie nicht ausschließen, bleibt als Spielraum erhalten.*
 
 >>*Bsp: Ein Hersteller stoffschlüssig gefügter Produkte weiß
 noch nicht, wie er eine Demontage gestalten würde, kann aber eine zerstörungsfreie
@@ -356,19 +352,22 @@ Sobald alle Betrachtungseinheiten erfasst sind, geht es links über den Knopf zu
 
 def seite_erfassung(state, features, weights):
     """Schritt 1+3 vereint: gemeinsame Erfassung von Ist, Potenzial, Ausschluss."""
-    st.title("Konfigurator — Zustandsaufnahme")
+    st.title("Zustandsaufnahme")
+    st.divider()
 
     for idx, merkmal in enumerate(features):
         sp_titel, sp_gewicht = st.columns([4, 1])
-        sp_titel.subheader(merkmal)
+        with sp_titel:
+            st.caption("Merkmal:")
+            st.subheader(merkmal)
         with sp_gewicht:
             g = st.number_input(
                 "Gewicht", min_value=1.0,
                 value=float(core.get_gewicht(state, merkmal)),
                 step=0.5, key=f"gw_{merkmal}",
-                help="Relative Wichtigkeit fuer die Aehnlichkeit: 1 = normal, "
+                help="Relative Wichtigkeit für die Ähnlichkeit: 1 = normal, "
                      "2 = doppelt so wichtig, 1,5 = anderthalbfach usw. "
-                     "Gilt fuer das Merkmal ueber alle Einheiten.")
+                     "Gilt für das Merkmal über alle Betrachtungseinheiten.")
             core.set_gewicht(state, merkmal, g)
         erfassung_tabelle(state, features, merkmal, weights)
         if idx < len(features) - 1:
@@ -396,8 +395,8 @@ def sidebar_navigation(state, features, types):
 def _sidebar_bewertung(state):
     """Schritt 2 (Aehnlichkeitsbewertung): Navigation + Hinweis zur Typwahl."""
     with st.sidebar:
-        st.header("Naechster Schritt")
-        if st.button("← Zurueck zur Zustandsaufnahme", width="stretch"):
+        st.header("Nächster Schritt")
+        if st.button("← Zurück zur Zustandsaufnahme", width="stretch"):
             state["phase"] = "konfiguration"
             st.rerun()
         offen = [core.get_name(state, uid) for uid in state["units"]
@@ -409,19 +408,19 @@ def _sidebar_bewertung(state):
             st.rerun()
         st.divider()
         if alle_haben:
-            st.caption("Für jede Einheit ist mindestens ein Typ in der engeren "
-                       "Auswahl. Du kannst zur Zieltypbestimmung weitergehen.")
+            st.caption("Für jede Betrachtungseinheit ist mindestens ein Typ in der engeren "
+                       "Auswahl. Sie können zur Zieltypbestimmung weitergehen.")
         else:
-            st.caption("Waehle im Hauptbereich fuer jede Einheit mindestens einen "
-                       "Typ in die engere Auswahl. Erst dann kannst du weiter. Es "
+            st.caption("Wählen Sie für jede Betrachtungseinheit mindestens einen "
+                       "Typ in die engere Auswahl. Erst dann können Sie weiter. Es "
                        "fehlt noch: " + ", ".join(offen) + ".")
 
 
 def _sidebar_sollfestlegung(state, features):
     """Schritt 3 (Zieltypbestimmung): Navigation + Hinweis, was je Fall zu tun ist."""
     with st.sidebar:
-        st.header("Naechster Schritt")
-        if st.button("← Zurueck zur Ähnlichkeitsbewertung", width="stretch"):
+        st.header("Nächster Schritt")
+        if st.button("← Zurück zur Ähnlichkeitsbewertung", width="stretch"):
             state["phase"] = "ergebnis_soll"
             st.rerun()
         # Belegt zugleich das Soll vor (Faelle 1/2/3) und prueft Vollstaendigkeit.
@@ -439,8 +438,8 @@ def _sidebar_sollfestlegung(state, features):
 def _sidebar_typvergleich(state):
     """Schritt 4 (Typvergleich): Navigation + Hinweis zur Zieltyp-Festlegung."""
     with st.sidebar:
-        st.header("Naechster Schritt")
-        if st.button("← Zurueck zur Zieltypbestimmung", width="stretch"):
+        st.header("Nächster Schritt")
+        if st.button("← Zurück zur Zieltypbestimmung", width="stretch"):
             state["phase"] = "detaillierung"
             st.rerun()
         # Weiter erst, wenn jede Einheit mit engerer Auswahl einen Zieltyp hat.
@@ -461,7 +460,7 @@ def _sidebar_massnahmen(state):
     """Schritt 4 (Konsolidierung): Zurueck-Navigation + Hinweis."""
     with st.sidebar:
         st.header("Konsolidierung")
-        if st.button("← Zurueck zum Typvergleich", width="stretch"):
+        if st.button("← Zurück zum Typvergleich", width="stretch"):
             state["phase"] = "zusammenfassung"
             st.rerun()
         st.divider()
@@ -490,7 +489,8 @@ def _sidebar_erfassung(state, features):
             )
             offen = gesamt - versorgt
             st.progress(versorgt / gesamt,
-                        text=f"{core.get_name(state, uid)}: {versorgt}/{gesamt} versorgt"
+                        text=f"{core.get_name(state, uid)}: {versorgt}/{gesamt} "
+                             "Merkmale bearbeitet"
                              + ("  ✓" if offen == 0 else f"  ({offen} offen)"))
 
         st.divider()
@@ -517,12 +517,12 @@ def _sidebar_erfassung(state, features):
             st.warning(
                 "Bevor es weitergeht, fehlt noch etwas:\n\n" + zeilen
                 + "\n\nSetze dort entweder ein Ist, oder stelle das Merkmal auf "
-                "'Ist unbekannt', wenn du den heutigen Zustand nicht kennst."
+                "'Ist unbekannt', wenn Sie die aktuelle Ausprägung nicht kennen."
             )
 
 
 def seite_konfiguration(state, features, weights):
-    st.title("Konfigurator — Ist-Aufnahme")
+    st.title("Ist-Aufnahme")
 
     if not state["units"]:
         st.info("Noch keine Betrachtungseinheit vorhanden. "
@@ -546,8 +546,8 @@ def _fmt(x):
 def _status_anzeige(status):
     """Wandelt einen core.STATUS_*-Wert in (Symbol, Klartext) fuer die Anzeige."""
     return {
-        core.STATUS_IST:           ("✅", "Passt bereits"),
-        core.STATUS_POTENTIAL:     ("🟠", "Erreichbar"),
+        core.STATUS_IST:           ("✅", "Passt aktuell"),
+        core.STATUS_POTENTIAL:     ("🟠", "Passt potenziell"),
         core.STATUS_IST_UNPASSEND: ("🔶", "Passt nicht"),
         core.STATUS_OFFEN:         ("⬜", "Offen"),
         core.STATUS_BLOCKIERT:     ("⛔", "Ausgeschlossen"),
@@ -609,7 +609,7 @@ def potential_tabelle(state, features, merkmal):
 
 
 def seite_potential(state, features):
-    st.title("Konfigurator — Potenzial-Aufnahme")
+    st.title("Potenzial-Aufnahme")
 
     col_zur, col_weiter, col_info = st.columns([1, 1, 2])
     with col_zur:
@@ -643,7 +643,7 @@ def seite_ergebnis_ist(state, features, types, weights):
     import altair as alt
     FARBE_IST = "#1f77b4"   # Blau (durchgaengig fuer Ist)
 
-    st.title("Konfigurator — Ist-Ergebnis")
+    st.title("Ist-Ergebnis")
 
     col_zurueck, col_weiter, _ = st.columns([1, 1, 3])
     with col_zurueck:
@@ -671,7 +671,7 @@ def seite_ergebnis_ist(state, features, types, weights):
         # Kopf-Kennzahlen: nur Ist.
         k1, k2, k3 = st.columns(3)
         k1.metric("Bestpassender Typ", best_name)
-        k2.metric("Ist-Uebereinstimmung", _fmt(best_ist))
+        k2.metric("Ist-Übereinstimmung", _fmt(best_ist))
         k3.metric("Eindeutigkeit (Ist)", _fmt(eind))
 
         # Balkendiagramm: nur Ist, in Blau.
@@ -705,16 +705,16 @@ def seite_ergebnis_ist(state, features, types, weights):
         st.dataframe(df_tab, hide_index=True, width="stretch")
 
         # Guete: Abdeckung + Ist-ueber-beantwortete des Bestpassers.
-        st.subheader("Guete der Aussage")
+        st.subheader("Güte der Aussage")
         g1, g2 = st.columns(2)
         g1.metric("Abdeckung (beantwortete Merkmale)", _fmt(anteil),
                   help="Gewichteter Anteil der Merkmale, die nicht 'keine Angabe' sind.")
         g2.metric(f"Ist {best_name} (nur beantwortete)",
                   _fmt(kpi_beantwortet[best_name]),
-                  help="Ist-KPI, aber nur ueber beantwortete Merkmale gerechnet.")
+                  help="Wie der Ist-Wert, aber nur über beantwortete Merkmale gerechnet.")
         if anteil < 1.0:
             st.caption("Diese Einheit hat 'keine Angabe'-Merkmale; der Ist-KPI ist "
-                       "dadurch niedriger als der Wert ueber nur beantwortete Merkmale.")
+                       "dadurch niedriger als der Wert über nur beantwortete Merkmale.")
 
         st.divider()
 
@@ -736,25 +736,25 @@ Profil eines Typs liegen, desto ähnlicher ist Ihre Betrachtungseinheit diesem T
 **1. Tab je Betrachtungseinheit.** Jede Betrachtungseinheit wird für sich bewertet.
 
 **2. Ähnlichkeit je Typ.** Oben stehen die bestpassenden Typen, darunter zeigt ein
-Diagramm je Typ zwei Balken.
+Diagramm je Typ zwei Intervalle.
 
 Waren alle Merkmale bekannt, ist die Ähnlichkeit eine einzelne Zahl. Sobald
-Merkmale ohne Ist-Angabe geblieben sind, rechnet das Werkzeug zwei Annahmen durch,
-nämlich einmal, dass alle diese Merkmale zum Typ passen, und einmal, dass keines
-von ihnen passt.
+Merkmale ohne Ist-Angabe geblieben sind, rechnet das Werkzeug zwei Annahmen durch:
 
-*Maximum (rechtes Balkenende): der günstigste Fall.*
+*Maximum (rechtes Ende des Intervalls): der günstigste Fall, alle unbekannten
+Merkmale passen zum Typ.*
 
-*Minimum (linkes Balkenende): der ungünstigste Fall.*
+*Minimum (linkes Ende des Intervalls): der ungünstigste Fall, alle unbekannten
+Merkmale passen nicht zum Typ.*
 
-Der tatsächliche, bisher unbekannte Wert liegt zwischen beiden, deshalb ein Balken
-statt einer einzelnen Zahl. Je breiter der Balken, desto unsicherer die Aussage.
+Der tatsächliche, bisher unbekannte Wert liegt in diesem Intervall. Je breiter das
+Intervall, desto unsicherer die Aussage.
 
-*Bereinigter Wert (Strich im Balken): hier bleiben die Merkmale ohne Ist-Angabe ganz
-außen vor, gerechnet wird nur über die bekannten Merkmale. Das ist die belastbarste
-Schätzung und die Grundlage der Rangfolge.*
+*Bereinigter Wert (Strich im Intervall): Hier bleiben die Merkmale ohne Ist-Angabe
+ganz außen vor, gerechnet wird nur über die bekannten Merkmale. Das ist die
+belastbarste Schätzung und die Grundlage der Rangfolge.*
 
-Je Typ werden zwei Balken gezeigt.
+Je Typ werden zwei Intervalle gezeigt.
 
 <span style="color:#1f77b4">■</span> *Ist: wie ähnlich die Betrachtungseinheit dem
 Typ aktuell ist. Es zählen nur die Ist-Ausprägungen.*
@@ -763,10 +763,10 @@ Typ aktuell ist. Es zählen nur die Ist-Ausprägungen.*
 könnte, wenn sie ihren Spielraum nutzt. Hier zählen zusätzlich die
 Potenzial-Ausprägungen.*
 
-**3. Güte der Aussage.** Zwei Kennzahlen sagen, wie belastbar das Ergebnis ist.
+**3. Gütebewertung.** Zwei Kennzahlen sagen, wie belastbar das Ergebnis ist.
 
-*Abdeckung: Anteil der Merkmale mit Ist-Angabe. Je höher, desto schmaler die
-Balken.*
+*Abdeckung: gewichteter Anteil der bekannten Merkmale, also jener mit Ist-Angabe.
+Je höher, desto schmaler die Intervalle und desto aussagekräftiger das Ergebnis.*
 
 *Eindeutigkeit: Abstand zwischen bestem und zweitbestem Typ. Ein kleiner Abstand
 heißt, dass mehrere Typen ähnlich gut passen.*
@@ -774,18 +774,29 @@ heißt, dass mehrere Typen ähnlich gut passen.*
 **4. Abgleich je Merkmal.** Klappen Sie einen Typ auf, um zu sehen, woher sein
 Ähnlichkeitswert kommt. Je Merkmal steht dort einer von fünf Fällen.
 
-*✅ Passt bereits: Ihre aktuelle Ausprägung entspricht dem Profil des Typs.*
+*Merkmal bekannt*
 
-*🟠 Erreichbar: passt aktuell nicht, aber eine angegebene Potenzial-Ausprägung
+>>*✅ Passt aktuell: Ihre aktuelle Ausprägung entspricht dem Profil des Typs.*
+
+>>*🟠 Passt potenziell: passt aktuell nicht, aber eine angegebene
+Potenzial-Ausprägung passt.*
+
+>>*🔶 Passt nicht: Weder die aktuelle noch eine angegebene Potenzial-Ausprägung
 passt.*
 
-*🔶 Passt nicht: weder die aktuelle noch eine angegebene Potenzial-Ausprägung
-passt.*
+*Merkmal unbekannt*
 
-*⬜ Offen: ohne Ist-Angabe, der Typ ist hier weder bestätigt noch ausgeschlossen.*
+>>*⬜ Offen: Das Profil dieses Typs wurde nicht vollständig ausgeschlossen, der Typ
+bleibt hier also erreichbar. Ob die künftig angestrebte Ausprägung zu ihm passt,
+ist noch offen.*
 
-*⛔ Ausgeschlossen: alle für diesen Typ passenden Ausprägungen haben Sie
-ausgeschlossen. Dieses Merkmal kann den Typ dauerhaft nicht erreichen.*
+>>*⛔ Ausgeschlossen: Das Profil dieses Typs wurde vollständig ausgeschlossen, der
+Typ ist hier also nicht erreichbar. Es liegt ein harter Verstoß vor.*
+
+>>*Harter Verstoß: ein Merkmal, bei dem sämtliche für einen Typ passenden
+Ausprägungen ausgeschlossen wurden. Der Typ ist damit nicht insgesamt
+ausgeschlossen, es ist lediglich ein Warnhinweis, dass er bei diesem Merkmal
+dauerhaft nicht passen wird.*
 
 **5. Engere Auswahl.** Wählen Sie je Betrachtungseinheit die Typen, die Sie
 weiterverfolgen möchten.
@@ -809,7 +820,7 @@ def seite_ergebnis_soll(state, features, types, weights):
     FARBE_IST = "#1f77b4"    # Blau
     FARBE_SOLL = "#ff7f0e"   # Orange
 
-    st.title("Konfigurator — Ähnlichkeitsbewertung")
+    st.title("Ähnlichkeitsbewertung")
 
     if not state["units"]:
         st.caption("Keine Betrachtungseinheiten vorhanden.")
@@ -909,7 +920,7 @@ def seite_ergebnis_soll(state, features, types, weights):
                 .encode(
                     y=alt.Y("Typ:N", sort=typ_reihenfolge, title=None),
                     yOffset=alt.YOffset("Art:N", sort=["Ist", "Potenzial"]),
-                    x=alt.X("min:Q", title="Aehnlichkeit (%)", scale=alt.Scale(domain=[0, 100])),
+                    x=alt.X("min:Q", title="Ähnlichkeit (%)", scale=alt.Scale(domain=[0, 100])),
                     x2="max:Q",
                     color=alt.Color("Art:N", scale=farb_skala, title=None),
                     tooltip=["Typ", "Art",
@@ -950,10 +961,12 @@ def seite_ergebnis_soll(state, features, types, weights):
                 st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
 
             # --- Guete-Kennzahlen ---
-            st.subheader("Güte der Aussage")
+            st.subheader("Gütebewertung")
             g1, g2, g3 = st.columns(3)
             g1.metric("Abdeckung (Ist)", _fmt(anteil),
-                      help="Gewichteter Anteil der Merkmale mit Ist-Angabe.")
+                      help="Gewichteter Anteil der bekannten Merkmale, also jener "
+                           "mit Ist-Angabe. Je höher, desto schmaler die Intervalle "
+                           "und desto aussagekräftiger das Ergebnis.")
             g2.metric("Eindeutigkeit (Ist)", _fmt(eind_ist),
                       help="Abstand bester zu zweitbester Typ, bereinigter Ist-Wert.")
             g3.metric("Eindeutigkeit (Potenzial)", _fmt(eind_soll),
@@ -1000,11 +1013,12 @@ def seite_ergebnis_soll(state, features, types, weights):
             aktuelle_auswahl = core.get_engere_auswahl(state, uid)
             wahl = st.multiselect(
                 f"Typen für Betrachtungseinheit {uid} "
-                "(werden anschliessend ausgestaltet und verglichen)",
+                "(werden anschließend ausgestaltet und verglichen)",
                 options=typ_namen,
                 default=[t for t in aktuelle_auswahl if t in typ_namen],
                 key=f"engere_auswahl_{uid}",
-                help="Je mehr Typen gewaehlt sind, desto aufwaendiger wird die "
+                placeholder="Typen wählen",
+                help="Je mehr Typen gewählt sind, desto aufwändiger wird die "
                      "Zieltypbestimmung, da dort jedes Merkmal je Typ einzeln zu "
                      "entscheiden ist. Eine feste Obergrenze gibt es bewusst nicht.",
             )
@@ -1071,7 +1085,7 @@ def _aufwand_dialog(state, uid, typ, merkmal, ziel_opt, im_profil):
     if sp2.button("Abbrechen", width="stretch"):
         st.rerun()
     if stufe is None:
-        st.caption("Bitte eine Aufwandsstufe waehlen, um zu speichern.")
+        st.caption("Bitte eine Aufwandsstufe wählen, um zu speichern.")
 
 
 def detail_merkmal_block(state, features, types, uid, merkmal, typ, status):
@@ -1191,7 +1205,7 @@ def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, ist_wert, profil, spal
     if opt == soll_wert:
         spalte.markdown("● **Ziel**")
     else:
-        if spalte.button("○ waehlen", key=f"soll_{uid}_{typ}_{merkmal}_{opt}",
+        if spalte.button("○ wählen", key=f"soll_{uid}_{typ}_{merkmal}_{opt}",
                          type="secondary", width="stretch"):
             if opt == ist_wert:
                 core.set_soll(state, uid, typ, merkmal, opt)
@@ -1235,18 +1249,18 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
 
     # --- Statuszusammenfassung als Kennzahlen (fuenf Faelle) ---
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("✅ Passt bereits", anzahl[core.STATUS_IST])
-    k2.metric("🟠 Erreichbar", anzahl[core.STATUS_POTENTIAL])
+    k1.metric("✅ Passt aktuell", anzahl[core.STATUS_IST])
+    k2.metric("🟠 Passt potenziell", anzahl[core.STATUS_POTENTIAL])
     k3.metric("🔶 Passt nicht", anzahl[core.STATUS_IST_UNPASSEND])
     k4.metric("⬜ Offen", anzahl[core.STATUS_OFFEN])
     k5.metric("⛔ Ausgeschlossen", anzahl[core.STATUS_BLOCKIERT])
 
     # --- Fuenf aufklappbare Abschnitte, je Status einer ---
     abschnitte = [
-        (core.STATUS_IST,       "✅ Passt bereits",
+        (core.STATUS_IST,       "✅ Passt aktuell",
          "Die aktuelle Ausprägung liegt im Profil und wird angestrebt. Hier "
          "besteht kein Handlungsbedarf."),
-        (core.STATUS_POTENTIAL, "🟠 Erreichbar",
+        (core.STATUS_POTENTIAL, "🟠 Passt potenziell",
          "Eine als Potenzial erfasste Ausprägung liegt im Profil. Wählen Sie sie "
          "als Ziel und schätzen Sie den Aufwand."),
         (core.STATUS_IST_UNPASSEND, "🔶 Passt nicht",
@@ -1257,9 +1271,9 @@ def _detail_tab_inhalt(state, features, types, uid, typ):
          "Für dieses Merkmal liegt keine Angabe vor. Wählen Sie eine "
          "Ziel-Ausprägung oder „nichts anstreben“."),
         (core.STATUS_BLOCKIERT, "⛔ Ausgeschlossen",
-         "Alle Profilausprägungen wurden ausgeschlossen. Sie können dennoch eine "
-         "wählen, ohne die Erfassung in Schritt 1 zu ändern, oder „nichts "
-         "anstreben“."),
+         "Alle Profilausprägungen wurden ausgeschlossen. Prüfen Sie noch einmal, "
+         "ob das wirklich zutrifft. Ist eine Ausprägung doch erreichbar, können "
+         "Sie sie hier wählen, andernfalls wählen Sie „nichts anstreben“."),
     ]
     for status, titel, hinweis in abschnitte:
         merkmale = gruppen[status]
@@ -1298,9 +1312,9 @@ orientieren, und rechts wählen Sie in der Spalte Ziel die angestrebte Ausprägu
 
 >>*Ziel-Ausprägung: die Ausprägung, die Sie für dieses Merkmal künftig anstreben.
 Je Merkmal und Typ ist genau eine möglich. Merkmale, die bereits passen, brauchen
-keine Eingabe. Eine Ausprägung außerhalb des Profils erhöht die Ähnlichkeit nicht,
-ihr Aufwand wird aber erfasst. Bei Merkmalen ohne Ist-Angabe steht zusätzlich der
-Knopf* nichts anstreben *zur Verfügung.*
+keine Eingabe. Bei unbekannten Merkmalen können Sie über den Knopf* nichts
+anstreben *auch bewusst auf eine Ziel-Ausprägung verzichten, wenn das Merkmal für
+Ihren Anwendungsfall nicht sinnvoll festzulegen ist.*
 
 >>**1.2 Weicht die Ziel-Ausprägung von der aktuellen Ausprägung ab,
 schätzen Sie im Fenster den Aufwand.**
@@ -1327,7 +1341,7 @@ Zieltyp festlegen.
 
 
 def seite_detaillierung(state, features, types, weights):
-    st.title("Konfigurator — Zieltypbestimmung")
+    st.title("Zieltypbestimmung")
 
     # Das Soll wird in der Seitenleiste (alle_detaillierungen_vollstaendig) fuer
     # die Faelle 1/2/3 vorbelegt; die Seitenleiste laeuft vor dieser Seite.
@@ -1363,6 +1377,10 @@ def seite_detaillierung(state, features, types, weights):
 
             st.divider()
 
+_STUFEN_TEXT = {core.AUFWAND_KEIN: "ohne", core.AUFWAND_GERING: "gering",
+                core.AUFWAND_MITTEL: "mittel", core.AUFWAND_HOCH: "hoch"}
+
+
 def _stufendiagramm(state, features, types, weights, uid, auswahl):
     """Treppendiagramm je Betrachtungseinheit: erreichbare Aehnlichkeit ueber die
     vier Aufwandsstufen k = 0..3, ein Verlauf je Typ der engeren Auswahl.
@@ -1385,6 +1403,7 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
             neu_je_stufe[st_k].append(f["merkmal"])
         for k in core.AUFWAND_STUFEN_K:
             zeilen.append({"stufe": k, "aehnlichkeit": score[k], "typ": typ,
+                           "stufe_text": _STUFEN_TEXT[k],
                            "neu": ", ".join(neu_je_stufe[k]) or "—"})
     df = pd.DataFrame(zeilen)
 
@@ -1407,7 +1426,7 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
                                       title="erreichbare Ähnlichkeit")),
                 color=alt.Color("typ:N", title="Typ"),
                 tooltip=[alt.Tooltip("typ:N", title="Typ"),
-                         alt.Tooltip("stufe:Q", title="Stufe k"),
+                         alt.Tooltip("stufe_text:N", title="Aufwandsstufe"),
                          alt.Tooltip("neu:N", title="ab dieser Stufe neu"),
                          alt.Tooltip("aehnlichkeit:Q", title="Ähnlichkeit",
                                      format=".0%")],
@@ -1423,7 +1442,7 @@ def _stufendiagramm(state, features, types, weights, uid, auswahl):
         st.line_chart(df.pivot(index="stufe", columns="typ",
                                values="aehnlichkeit"))
 
-    st.caption("Stufe 0 ist die ohne jede Änderung erreichte Übereinstimmung. "
+    st.caption("Stufe 0 ist die ohne jede Änderung erreichte Ähnlichkeit. "
                "Jede weitere Stufe schliesst die vorhergehenden ein, die Verläufe "
                "können daher nicht fallen.")
 
@@ -1447,8 +1466,9 @@ def _budgetdiagramm(state, features, types, weights, uid, auswahl):
         infos.append((typ, bk))
 
     if not hat_kurve:
-        st.caption("Noch keine Kosten erfasst. Trage in der Zieltypbestimmung "
-                   "Kosten je Aenderung ein, damit die Budgetkurve entsteht.")
+        st.caption("Noch keine Kosten erfasst. Tragen Sie in der "
+                   "Zieltypbestimmung Kosten je Änderung ein, damit die "
+                   "Budgetkurve entsteht.")
         return
 
     df = pd.DataFrame(zeilen)
@@ -1485,7 +1505,7 @@ def _budgetdiagramm(state, features, types, weights, uid, auswahl):
             st.caption(
                 f"{typ}: {len(bk['unbeziffert'])} Merkmal(e) ohne Kostenschätzung "
                 f"({namen}). Die planbare Kurve deckelt bei "
-                f"{bk['deckel'] * 100:.0f} %, mit diesen Aenderungen waeren bis zu "
+                f"{bk['deckel'] * 100:.0f} %, mit diesen Änderungen wären bis zu "
                 f"{bk['max_gesamt'] * 100:.0f} % erreichbar.")
 
     if any(not bk.get("exakt", True) for _, bk in infos):
@@ -1526,7 +1546,7 @@ def _dauer_diagramm(state, features, types, weights, uid, auswahl):
             tooltip=[alt.Tooltip("merkmal:N", title="Merkmal"),
                      alt.Tooltip("typ:N", title="Typ"),
                      alt.Tooltip("dauer:Q", title="Dauer (Wochen)")])
-            .properties(height=40 + 26 * len(df)))
+            .properties(height=60 + 44 * len(df)))
         try:
             st.altair_chart(chart, width="stretch")
         except TypeError:
@@ -1594,24 +1614,24 @@ mit welchem Aufwand, welchem Budget und welcher Dauer erreichbar ist.
 
 **1. Tab je Betrachtungseinheit.**
 
-**2. Merkmale mit Änderungsbedarf.** Je Typ eine Tabelle mit allen Merkmalen, deren
-Ziel-Ausprägung von der aktuellen abweicht, samt Ihren Schätzungen.
+**2. Merkmale mit Änderungsbedarf.** Je Typ eine Tabelle mit den Änderungen, die
+nötig wären, um sich diesem Typ anzunähern. Aufgeführt sind alle Merkmale, deren
+Ziel-Ausprägung von der aktuellen abweicht, mit dem geschätzten Aufwand aus
+Aufwandsstufe und Kosten sowie dem Nutzen in Form des Ähnlichkeitsgewinns.
 
 *Ähnlichkeitsgewinn: um wie viele Prozentpunkte die Ähnlichkeit zum Typ steigt,
 wenn diese Änderung umgesetzt wird.*
 
-**3. Erreichbare Ähnlichkeit nach Aufwand.** Je Typ ein Verlauf über die vier
-Aufwandsstufen.
-
-*Aufwandsstufe: zeigt die Ähnlichkeit zum Typ, wenn alle Änderungen bis zu dieser
-Stufe umgesetzt werden. Ohne bedeutet keine Änderung, gering nur die geringen,
-mittel zusätzlich die mittleren und hoch alle.*
+**3. Diagramm: Erreichbare Ähnlichkeit nach Aufwand.** Je Typ ein Verlauf über die
+vier Aufwandsstufen. Er zeigt die Ähnlichkeit zum Typ, wenn alle Änderungen bis zu
+dieser Stufe umgesetzt werden. Ohne bedeutet keine Änderung, gering nur die
+geringen, mittel zusätzlich die mittleren und hoch alle.
 
 Welcher Typ am besten passt, kann sich mit der Aufwandsstufe ändern. So kann ein
 Typ ohne jede Änderung die höchste Ähnlichkeit aufweisen, während ein anderer ihn
 bei mittlerem Aufwand übertrifft.
 
-**4. Erreichbare Ähnlichkeit nach Budget.** Je Typ eine Kurve, die zu jedem Budget
+**4. Diagramm: Erreichbare Ähnlichkeit nach Budget.** Je Typ eine Kurve, die zu jedem Budget
 die höchste erreichbare Ähnlichkeit zeigt. Zudem, welche Kombination von Änderungen
 dafür umzusetzen ist. Änderungen ohne Kostenangabe fließen nicht ein und begrenzen
 die Kurve nach oben.
@@ -1619,12 +1639,11 @@ die Kurve nach oben.
 **5. Dauer der Änderungen.** Ein Balken je Änderung, alle beginnen bei null. Bei
 paralleler Umsetzung bestimmt die längste Dauer die Gesamtdauer.
 
-**6. Zieltyp festlegen.** Wählen Sie unten je Betrachtungseinheit den Typ, den Sie
-anstreben.
+**6. Zieltyp festlegen.** Wählen Sie je Betrachtungseinheit einen Zieltyp.
 
-*Zieltyp: der Typ, an dem sich die Betrachtungseinheit künftig ausrichtet. Seine
-Zielkonfiguration ist die Grundlage des nächsten Schritts. Die Wahl wägt die
-erreichbare Ähnlichkeit gegen den Aufwand ab, den Sie bereitstellen wollen.*
+*Zieltyp: der Typ, an dem Sie die weitere Ausgestaltung der Betrachtungseinheit
+orientieren. Die gewählte Zielkonfiguration und die dadurch nötigen Änderungen sind
+die Grundlage für den nächsten Schritt.*
 
 Sobald jede Betrachtungseinheit einen Zieltyp hat, geht es links über den Knopf zur
 Konsolidierung weiter.
@@ -1632,7 +1651,7 @@ Konsolidierung weiter.
 
 
 def seite_zusammenfassung(state, features, types, weights):
-    st.title("Konfigurator — Typvergleich")
+    st.title("Typvergleich")
 
     if not state["units"]:
         st.caption("Keine Betrachtungseinheiten vorhanden.")
@@ -1862,8 +1881,8 @@ def _morphologie_html(state, uid, typ_name, typ_profil, features):
         teile.extend(zeile(m) for m in gruppe)
     teile.append("</table>")
     teile.append("<p class='leg'>Grau hinterlegt: Konfigurationsprofil des Zieltyps. "
-                 "Bei bekanntem Ist-Zustand sind die Ist- und die Ziel-Auspraegung "
-                 "gekennzeichnet, bei Uebereinstimmung beider als Ist = Ziel.</p>")
+                 "Bei bekannter Ausprägung sind die Ist- und die Ziel-Ausprägung "
+                 "gekennzeichnet, bei Übereinstimmung beider als Ist = Ziel.</p>")
     return "\n".join(teile)
 
 
@@ -1878,13 +1897,23 @@ def _be_farben(einheiten):
 
 def _be_legende_html(state, einheiten, farben):
     """Farblegende der Einheiten mit Erklaerung der Ist-/Ziel-Kennzeichnung."""
-    teile = ["<p class='leg'><b>Einheiten:</b> "]
+    teile = ["<p class='leg'><b>Betrachtungseinheiten:</b> "]
     for uid in einheiten:
         teile.append(f"<span class='bg z' style='background:{farben[uid]}'>"
                      f"{core.get_name(state, uid)}</span> ")
-    teile.append("<br><span class='sub'>Gefüllt = Ziel-Ausprägung, umrandet = "
-                 "heutiger Ist-Zustand, „= Name“ = Ist entspricht bereits dem "
-                 "Ziel.</span></p>")
+    teile.append("</p>")
+    # Je Legendenelement eine eigene Zeile, mit einer Beispielmarke in der
+    # Darstellung, die auch im Kasten verwendet wird.
+    bsp = einheiten[0] if einheiten else None
+    farbe = farben[bsp] if bsp else "#333333"
+    teile.append("<p class='leg'><span class='sub'>"
+                 f"<span class='bg z' style='background:{farbe}'>Name</span> "
+                 "Ziel-Ausprägung<br>"
+                 f"<span class='bg i' style='color:{farbe};border-color:{farbe}'>"
+                 "Name</span> Ist-Ausprägung<br>"
+                 f"<span class='bg z' style='background:{farbe}'>= Name</span> "
+                 "Ist-Ausprägung entspricht bereits der Ziel-Ausprägung"
+                 "</span></p>")
     return "".join(teile)
 
 
@@ -1972,10 +2001,11 @@ def _export_html(state, features, types, weights):
     # 2. Priorisierung der Einheiten (Rangfolge nach Nutzwert).
     nw = core.nwa_nutzwerte(state, types, features, weights)
     if nw:
-        teile.append("<h2>Priorisierung der Einheiten</h2>")
-        teile.append("<p>Reihenfolge, in der die Einheiten angegangen werden "
-                     "sollten, nach der Nutzwertanalyse.</p>")
-        teile.append("<table><tr><th>Rang</th><th>Einheit</th><th>Nutzwert</th></tr>")
+        teile.append("<h2>Priorisierung der Betrachtungseinheiten</h2>")
+        teile.append("<p>Reihenfolge, in der die Betrachtungseinheiten angegangen "
+                     "werden sollten, nach der Nutzwertanalyse.</p>")
+        teile.append("<table><tr><th>Rang</th><th>Betrachtungseinheit</th>"
+                     "<th>Nutzwert</th></tr>")
         for rang, (uid, wert) in enumerate(nw, 1):
             teile.append(f"<tr><td>{rang}</td><td>{core.get_name(state, uid)}</td>"
                          f"<td>{wert * 100:.1f} %</td></tr>")
@@ -1985,7 +2015,8 @@ def _export_html(state, features, types, weights):
     massnahmen = core.massnahmen_liste(state, types, features, weights)
     if massnahmen:
         teile.append("<h2>Harmonisierte Änderungen</h2>")
-        teile.append("<table><tr><th>Nr.</th><th>Merkmal</th><th>Einheit(en)</th>"
+        teile.append("<table><tr><th>Nr.</th><th>Merkmal</th>"
+                     "<th>Betrachtungseinheit(en)</th>"
                      "<th>Ist</th><th>Ziel</th><th>Ähnlichkeitsgewinn</th>"
                      "<th>Aufwand</th><th>Kosten</th><th>Dauer</th>"
                      "<th>Voraussetzung</th></tr>")
@@ -2005,7 +2036,7 @@ def _export_html(state, features, types, weights):
         teile.append("</table>")
 
     # 4. Gemeinsamer morphologischer Kasten mit allen Einheiten.
-    teile.append("<h2>Morphologischer Kasten mit allen Einheiten</h2>")
+    teile.append("<h2>Morphologischer Kasten mit allen Betrachtungseinheiten</h2>")
     teile.append(_be_legende_html(state, einheiten, farben))
     teile.append(_gemeinsamer_kasten_html(state, einheiten, features, types, farben))
 
@@ -2090,7 +2121,8 @@ def _harmonisierung(state, features, types, weights):
         daten.append({
             "Änderung": str(i),
             "Merkmal": _dedup(m["merkmale"]),
-            "Einheit(en)": ", ".join(core.get_name(state, u) for u in m["einheiten"]),
+            "Betrachtungseinheit(en)": ", ".join(core.get_name(state, u)
+                                                 for u in m["einheiten"]),
             "Ist": _dedup(m["ist_texte"]),
             "Ziel": _dedup(m["ziele"]),
             "Ähnlichkeitsgewinn": f"+{m['gewinn'] * 100:.1f} %-Pkt.",
@@ -2101,7 +2133,7 @@ def _harmonisierung(state, features, types, weights):
             "Voraussetzung": det.get("voraussetzung", ""),
         })
     df = pd.DataFrame(daten)
-    fest = ["Änderung", "Merkmal", "Einheit(en)", "Ist", "Ziel",
+    fest = ["Änderung", "Merkmal", "Betrachtungseinheit(en)", "Ist", "Ziel",
             "Ähnlichkeitsgewinn", "Aufwand", "Kosten", "Dauer"]
     edit = st.data_editor(
         df, hide_index=True, width="stretch",
@@ -2134,14 +2166,22 @@ def _harmonisierung(state, features, types, weights):
                 + ". Wählen Sie die betreffenden Änderungen unten aus.")
 
     # Ein Werkzeug: Mehrfachauswahl zum Zusammenlegen beliebiger Massnahmen.
-    st.markdown("**Änderungen zusammenlegen**")
+    st.markdown(
+        "**Änderungen zusammenlegen** (optional)",
+        help="Wählen Sie mehrere Änderungen aus, die sich gemeinsam umsetzen "
+             "lassen, etwa weil mehrere Betrachtungseinheiten dasselbe Ziel "
+             "verfolgen oder weil verschiedene Änderungen dieselbe Voraussetzung "
+             "benötigen. Der Ähnlichkeitsgewinn addiert sich, während Aufwand, "
+             "Kosten und Dauer nur einmal anfallen und gemeinsam neu zu schätzen "
+             "sind.")
     label = {}
     for i, m in enumerate(massnahmen, 1):
         if not m["ist_synergie"]:
             einh = ", ".join(core.get_name(state, u) for u in m["einheiten"])
             label[f"{i}: {_dedup(m['merkmale'])} → {_dedup(m['ziele'])} ({einh})"] = m["id"]
     auswahl = st.multiselect("Änderungen für eine gemeinsame Änderung wählen",
-                             options=list(label), key="harm_select")
+                             options=list(label), key="harm_select",
+                             placeholder="Änderungen wählen")
     if len(auswahl) >= 2:
         if st.button("Zusammenlegen", type="primary", key="harm_merge"):
             _synergie_dialog(state, [label[a] for a in auswahl], massnahmen)
@@ -2212,7 +2252,7 @@ def _einheiten_portfolio(state, einheiten, types, features, weights):
     bietet, und stuetzt die Priorisierung visuell."""
     import pandas as pd
     df = pd.DataFrame([{
-        "Einheit": core.get_name(state, u),
+        "Betrachtungseinheit": core.get_name(state, u),
         "Aufwand": core.einheit_kennzahlen(state, u, types, features, weights)["aufwand"],
         "Gewinn": core.einheit_kennzahlen(state, u, types, features, weights)["gewinn"],
     } for u in einheiten])
@@ -2224,9 +2264,9 @@ def _einheiten_portfolio(state, einheiten, types, features, weights):
             y=alt.Y("Gewinn:Q", scale=alt.Scale(domain=[0, 1]),
                     axis=alt.Axis(format="%", title="erreichbarer Ähnlichkeitsgewinn")))
         punkte = basis.mark_circle(size=220).encode(
-            tooltip=["Einheit:N", "Aufwand:Q",
+            tooltip=["Betrachtungseinheit:N", "Aufwand:Q",
                      alt.Tooltip("Gewinn:Q", format=".0%")])
-        beschriftung = basis.mark_text(dy=-14).encode(text="Einheit:N")
+        beschriftung = basis.mark_text(dy=-14).encode(text="Betrachtungseinheit:N")
         chart = (punkte + beschriftung).properties(height=320)
         try:
             st.altair_chart(chart, width="stretch")
@@ -2250,8 +2290,7 @@ def _nutzwertanalyse(state, einheiten, types, features, weights):
     for k in list(krit):
         c1, c2, c3 = st.columns([3, 2, 1])
         richtung_txt = "klein ist besser" if k["richtung"] == "min" else "groß ist besser"
-        c1.markdown(f"**{k['name']}**  \n{richtung_txt}"
-                    f"{' · aus Änderungen' if k['auto'] else ''}")
+        c1.markdown(f"**{k['name']}**  \n{richtung_txt}")
         g = c2.number_input("Gewicht", min_value=0.0, value=float(k["gewicht"]),
                             step=5.0, key=f"nwa_g_{k['name']}",
                             label_visibility="collapsed")
@@ -2277,23 +2316,28 @@ def _nutzwertanalyse(state, einheiten, types, features, weights):
         st.rerun()
 
     st.markdown("**Bewertung je Betrachtungseinheit**")
+    # Spaltenueberschrift kennzeichnet, welche Werte schon aus den Aenderungen
+    # vorliegen. Der Kriterienname selbst bleibt davon unberuehrt.
+    spalte = {k["name"]: (f"{k['name']} (bereits erfasst)" if k["auto"]
+                          else k["name"]) for k in krit}
     daten = []
     for u in einheiten:
-        zeile = {"Einheit": core.get_name(state, u)}
+        zeile = {"Betrachtungseinheit": core.get_name(state, u)}
         for k in krit:
-            zeile[k["name"]] = core.nwa_get_wert(state, u, k, types, features, weights)
+            zeile[spalte[k["name"]]] = core.nwa_get_wert(
+                state, u, k, types, features, weights)
         daten.append(zeile)
     df = pd.DataFrame(daten)
-    cfg = {"Einheit": st.column_config.TextColumn(disabled=True)}
+    cfg = {"Betrachtungseinheit": st.column_config.TextColumn(disabled=True)}
     for k in krit:
-        cfg[k["name"]] = st.column_config.NumberColumn()
+        cfg[spalte[k["name"]]] = st.column_config.NumberColumn()
     edit = st.data_editor(df, hide_index=True, width="stretch",
                           key=f"nwa_editor_{len(krit)}_{len(einheiten)}",
                           column_config=cfg)
     for i, u in enumerate(einheiten):
         kz = core.einheit_kennzahlen(state, u, types, features, weights)
         for k in krit:
-            wert = edit.iloc[i][k["name"]]
+            wert = edit.iloc[i][spalte[k["name"]]]
             wert = float(wert) if pd.notna(wert) else 0.0
             if k["auto"] and abs(wert - kz[k["auto"]]) < 1e-9:
                 core.nwa_set_wert(state, u, k["name"], None)
@@ -2316,15 +2360,16 @@ def _nutzwertanalyse(state, einheiten, types, features, weights):
 
     st.markdown("**Rangfolge nach Nutzwert**")
     nw = core.nwa_nutzwerte(state, types, features, weights)
-    erg = pd.DataFrame([{"Einheit": core.get_name(state, u), "Nutzwert": v}
-                        for u, v in nw])
+    erg = pd.DataFrame([{"Betrachtungseinheit": core.get_name(state, u),
+                         "Nutzwert": v} for u, v in nw])
     try:
         import altair as alt
         chart = (alt.Chart(erg).mark_bar().encode(
             x=alt.X("Nutzwert:Q", scale=alt.Scale(domain=[0, 1]),
                     axis=alt.Axis(format="%")),
-            y=alt.Y("Einheit:N", sort="-x", title=None),
-            tooltip=["Einheit:N", alt.Tooltip("Nutzwert:Q", format=".1%")])
+            y=alt.Y("Betrachtungseinheit:N", sort="-x", title=None),
+            tooltip=["Betrachtungseinheit:N",
+                     alt.Tooltip("Nutzwert:Q", format=".1%")])
             .properties(height=60 + 40 * len(erg)))
         try:
             st.altair_chart(chart, width="stretch")
@@ -2416,10 +2461,10 @@ Mitarbeiterqualifizierung.*
 lassen. Wählen Sie sie im Auswahlfeld unter der Tabelle aus und erfassen Sie im
 Fenster die gemeinsamen Werte. Dafür gibt es zwei Anlässe.
 
->>*Gleiches Ziel: mehrere Betrachtungseinheiten streben bei demselben Merkmal
+>>*Gleiches Ziel: Mehrere Betrachtungseinheiten streben bei demselben Merkmal
 dieselbe Ausprägung an. Solche Fälle schlägt das Werkzeug unter der Tabelle vor.*
 
->>*Gleiche Voraussetzung: verschiedene Änderungen benötigen dieselbe
+>>*Gleiche Voraussetzung: Verschiedene Änderungen benötigen dieselbe
 Voraussetzung. Diese erkennen nur Sie, da sie sich aus Ihrer
 Voraussetzungs-Spalte ergeben.*
 
@@ -2449,7 +2494,7 @@ und ihre zeitliche Planung schließen sich als eigenes Vorhaben an.
 
 
 def seite_massnahmen(state, features, types, weights):
-    st.title("Konfigurator — Konsolidierung")
+    st.title("Konsolidierung")
 
     if not state["units"]:
         st.caption("Keine Betrachtungseinheiten vorhanden.")
@@ -2491,7 +2536,7 @@ if state["phase"] == "konfiguration":
     st.sidebar.header("Morphologie")
     hochgeladen = st.sidebar.file_uploader(
         "Excel-Morphologie laden (.xlsx)", type=["xlsx"],
-        help="Datei mit Merkmalen, Auspraegungen, Typprofilen und (optional) Gewichten."
+        help="Datei mit Merkmalen, Ausprägungen, Typprofilen und (optional) Gewichten."
     )
     try:
         if hochgeladen is not None:
@@ -2511,10 +2556,10 @@ if state["phase"] == "konfiguration":
     # Gewichtsfehler behandeln (Wahl anbieten).
     if gewicht_problem is not None:
         probleme, feat_roh, typ_roh = gewicht_problem
-        st.error("Die Gewichtsspalte enthaelt fehlerhafte Werte:")
+        st.error("Die Gewichtsspalte enthält fehlerhafte Werte:")
         for merkmal, grund in probleme:
             st.write(f"- **{merkmal}**: {grund}")
-        st.write("Du kannst die Excel korrigieren und neu laden, "
+        st.write("Sie können die Excel-Datei korrigieren und neu laden, "
                  "oder ohne Gewichtung fortfahren (alle Merkmale gleich).")
         if st.button("Ohne Gewichtung fortfahren", type="primary"):
             st.session_state.ignoriere_gewichte = True
