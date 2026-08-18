@@ -95,6 +95,22 @@ def merkmal_tabelle(state, features, merkmal, weights):
         zeile[-1].write("")
 
 
+@st.dialog("Betrachtungseinheit löschen")
+def _loeschen_dialog(state, uid):
+    """Sicherheitsabfrage vor dem Loeschen einer Betrachtungseinheit. Als Fenster,
+    damit der Tabellenkopf uebersichtlich bleibt."""
+    st.markdown(f"**{core.get_name(state, uid)}** wirklich löschen?")
+    st.caption("Alle Angaben dieser Betrachtungseinheit gehen dabei verloren. "
+               "Der Schritt lässt sich nicht rückgängig machen.")
+    sp1, sp2 = st.columns(2)
+    if sp1.button("Löschen", type="primary", width="stretch",
+                  key=f"dlg_del_ok_{uid}"):
+        st.session_state.zu_loeschen = uid
+        st.rerun()
+    if sp2.button("Abbrechen", width="stretch", key=f"dlg_del_no_{uid}"):
+        st.rerun()
+
+
 @st.dialog("Betrachtungseinheit umbenennen")
 def _umbenennen_dialog(state, uid):
     """Modaler Dialog zum Umbenennen einer Einheit. Zeigt ein Textfeld mit dem
@@ -128,27 +144,14 @@ def erfassung_tabelle(state, features, merkmal, weights):
     kopf[0].markdown("")
     for i, uid in enumerate(state["units"]):
         spalte = kopf[1 + i]
-        if st.session_state.get("warte_bestaetigung") == uid:
-            spalte.markdown(f"**{core.get_name(state, uid)}**  ⚠")
-            c1, c2 = spalte.columns(2)
-            if c1.button("Ja", key=f"ok_{uid}_{merkmal}", type="tertiary",
-                         help=f"{core.get_name(state, uid)} endgültig löschen", width="stretch"):
-                st.session_state.zu_loeschen = uid
-                st.rerun()
-            if c2.button("Nein", key=f"no_{uid}_{merkmal}", type="tertiary",
-                         help="Löschen abbrechen", width="stretch"):
-                st.session_state.pop("warte_bestaetigung", None)
-                st.rerun()
-        else:
-            titel, k_ren, k_del = spalte.columns([2, 1, 1])
-            titel.markdown(f"**{core.get_name(state, uid)}**")
-            if k_ren.button("✏", key=f"ren_{uid}_{merkmal}",
-                            help=f"{core.get_name(state, uid)} umbenennen"):
-                _umbenennen_dialog(state, uid)
-            if k_del.button("🗑", key=f"del_{uid}_{merkmal}",
-                            help=f"{core.get_name(state, uid)} löschen"):
-                st.session_state.warte_bestaetigung = uid
-                st.rerun()
+        titel, k_ren, k_del = spalte.columns([2, 1, 1])
+        titel.markdown(f"**{core.get_name(state, uid)}**")
+        if k_ren.button("✏", key=f"ren_{uid}_{merkmal}",
+                        help=f"{core.get_name(state, uid)} umbenennen"):
+            _umbenennen_dialog(state, uid)
+        if k_del.button("🗑", key=f"del_{uid}_{merkmal}",
+                        help=f"{core.get_name(state, uid)} löschen"):
+            _loeschen_dialog(state, uid)
 
     if kopf[-1].button("➕", key=f"add_{merkmal}", help="Neue Betrachtungseinheit",
                        width="stretch"):
@@ -510,7 +513,7 @@ def _sidebar_erfassung(state, features):
             for uid, merkmal, _ in probleme:
                 pro_einheit.setdefault(uid, []).append(merkmal)
             zeilen = "\n".join(
-                f"- Betrachtungseinheit {uid}: {len(ms)} Merkmal(e) mit "
+                f"- {core.get_name(state, uid)}: {len(ms)} Merkmal(e) mit "
                 f"'Ist bekannt' aber ohne Ist"
                 for uid, ms in pro_einheit.items()
             )
