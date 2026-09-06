@@ -38,6 +38,16 @@ NICHTS_ANSTREBEN = "\x00nichts_anstreben"
 
 # Eigene Fehlerklasse fuer Probleme beim Einlesen der Gewichte.
 # So kann die Oberflaeche gezielt darauf reagieren (Meldung + Wahl anbieten).
+def _kopf_schluessel(text):
+    """Normiert eine Spaltenueberschrift fuer den Vergleich: Kleinschreibung,
+    Umlaute aufgeloest, Leerzeichen und Bindestriche entfernt. Dadurch werden
+    'Ausprägung', 'Auspraegung' und 'AUSPRAEGUNG' gleich behandelt."""
+    t = str(text).strip().lower()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        t = t.replace(a, b)
+    return "".join(z for z in t if z.isalnum())
+
+
 class GewichtFehler(Exception):
     """Wird ausgeloest, wenn die Gewichtsspalte existiert, aber fehlerhafte
     Werte enthaelt (fehlend, nicht-numerisch, oder <= 0).
@@ -47,11 +57,13 @@ class GewichtFehler(Exception):
       .probleme : Liste (merkmal, grund)
       .features : die eingelesenen Merkmale/Auspraegungen
       .types    : die eingelesenen Typprofile
+      .gruppen  : Merkmal -> Merkmalsgruppe (oder None)
     """
-    def __init__(self, probleme, features=None, types=None):
+    def __init__(self, probleme, features=None, types=None, gruppen=None):
         self.probleme = probleme
         self.features = features
         self.types = types
+        self.gruppen = gruppen
         text = "; ".join(f"{m}: {g}" for m, g in probleme)
         super().__init__(f"Fehlerhafte Gewichte: {text}")
 
@@ -76,8 +88,8 @@ def _gewicht_zu_zahl(roh):
     return None
 
 
-def load_morphology(path_or_buffer):
-    """Liest die Excel-Morphologie im NEUEN Layout.
+def load_morphology_mit_gruppen(path_or_buffer):
+    """Liest die Excel-Morphologie.
 
     path_or_buffer: Dateipfad ODER bereits geoeffnete Datei (z.B. Streamlit-
     Hochladefeld). Beides funktioniert mit derselben Funktion.
@@ -104,20 +116,27 @@ def load_morphology(path_or_buffer):
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
 
-    klar = rows[0]      # Zeile 1: Typ-Klarnamen (ab Spalte D = Index 3)
+    klar = rows[0]      # Zeile 1: Typ-Klarnamen ueber den Typspalten
     header = rows[1]    # Zeile 2: Spaltenkoepfe
 
-    # Pruefen, ob es eine Gewichtsspalte gibt (Spalte B / Index 1 == "Gewicht").
-    hat_gewichtsspalte = (len(header) > 1 and header[1] is not None
-                          and str(header[1]).strip().lower() == "gewicht")
-
-    # Spaltenpositionen je nach Layout.
-    # Mit Gewicht:  A=Merkmal(0) B=Gewicht(1) C=Auspraegung(2) D..=Typen(3..)
-    # Ohne Gewicht: A=Merkmal(0) B=Auspraegung(1) C..=Typen(2..)
-    if hat_gewichtsspalte:
-        col_merkmal, col_gewicht, col_auspr, col_typ_start = 0, 1, 2, 3
-    else:
-        col_merkmal, col_gewicht, col_auspr, col_typ_start = 0, None, 1, 2
+    # Spalten werden ueber ihre Ueberschrift erkannt, nicht ueber feste
+    # Positionen. Dadurch sind die optionalen Spalten 'Merkmalsgruppe' und
+    # 'Gewicht' in beliebiger Kombination moeglich und alte Dateien ohne
+    # diese Spalten werden unveraendert eingelesen.
+    kopf = {}
+    for i, h in enumerate(header):
+        if h is None:
+            continue
+        kopf[_kopf_schluessel(h)] = i
+    col_gruppe = kopf.get("merkmalsgruppe", kopf.get("gruppe"))
+    col_merkmal = kopf.get("merkmal", 0)
+    col_gewicht = kopf.get("gewicht")
+    col_auspr = kopf.get("auspraegung")
+    if col_auspr is None:
+        # Rueckfall auf das alte Layout, falls die Ueberschrift fehlt.
+        col_auspr = col_merkmal + (2 if col_gewicht is not None else 1)
+    col_typ_start = col_auspr + 1
+    hat_gewichtsspalte = col_gewicht is not None
 
     # Typ-Spalten erfassen: Spaltenindex -> Klarname.
     type_cols = OrderedDict()
@@ -129,8 +148,10 @@ def load_morphology(path_or_buffer):
     features = OrderedDict()
     profiles = {name: {} for name in type_cols.values()}
     roh_gewichte = {}   # merkmal -> roher Zellwert aus der ersten Zeile
+    roh_gruppen = {}    # merkmal -> Merkmalsgruppe
 
     aktuelles_merkmal = None   # fuer das Auffuellen nach unten
+    aktuelle_gruppe = None     # dito fuer die Merkmalsgruppe
 
     for r in rows[2:]:
         if not r:
@@ -143,6 +164,14 @@ def load_morphology(path_or_buffer):
             if col_gewicht is not None:
                 roh = r[col_gewicht] if col_gewicht < len(r) else None
                 roh_gewichte[aktuelles_merkmal] = roh
+        # Merkmalsgruppe wird wie der Merkmalsname nach unten aufgefuellt,
+        # damit sie nur in der ersten Zeile einer Gruppe stehen muss.
+        if col_gruppe is not None:
+            zell_gruppe = r[col_gruppe] if col_gruppe < len(r) else None
+            if zell_gruppe is not None and str(zell_gruppe).strip() != "":
+                aktuelle_gruppe = str(zell_gruppe).strip()
+            if aktuelles_merkmal is not None and aktuelle_gruppe is not None:
+                roh_gruppen.setdefault(aktuelles_merkmal, aktuelle_gruppe)
         # Wenn noch kein Merkmal bekannt ist, Zeile ueberspringen.
         if aktuelles_merkmal is None:
             continue
@@ -161,6 +190,14 @@ def load_morphology(path_or_buffer):
             val = r[col] if col < len(r) else None
             if val is not None and str(val).strip().lower() == "x":
                 profiles[name].setdefault(aktuelles_merkmal, set()).add(auspr)
+
+    # --- Merkmalsgruppen aufbereiten ---
+    # Nur Merkmale beruecksichtigen, die auch tatsaechlich Auspraegungen haben.
+    gruppen = None
+    if col_gruppe is not None:
+        gruppen = {m: roh_gruppen[m] for m in features if m in roh_gruppen}
+        if not gruppen:
+            gruppen = None
 
     # --- Gewichte aufbereiten und (streng) pruefen ---
     if not hat_gewichtsspalte:
@@ -186,9 +223,138 @@ def load_morphology(path_or_buffer):
             # die Wahl "korrigieren ODER ungewichtet fortfahren" anbieten kann.
             # features/types werden mitgegeben, damit 'ungewichtet fortfahren'
             # ohne erneutes Einlesen moeglich ist.
-            raise GewichtFehler(probleme, features=features, types=profiles)
+            raise GewichtFehler(probleme, features=features, types=profiles,
+                                gruppen=gruppen)
 
+    return features, profiles, weights, gruppen
+
+
+def load_morphology(path_or_buffer):
+    """Wie load_morphology_mit_gruppen, gibt jedoch nur die drei klassischen
+    Rueckgabewerte zurueck. Bleibt fuer bestehende Aufrufer erhalten."""
+    features, profiles, weights, _ = load_morphology_mit_gruppen(path_or_buffer)
     return features, profiles, weights
+
+
+# ================================================================ GEWICHTUNG
+# Hierarchische Gewichtung im Sinne des Analytic Hierarchy Process (AHP).
+# Ebene 1: die Merkmalsgruppen werden paarweise verglichen.
+# Ebene 2: die Merkmale innerhalb einer Gruppe werden direkt ueber eine
+#          Wichtigkeitsstufe bewertet.
+# Das Gewicht eines Merkmals ergibt sich aus dem Produkt beider Anteile.
+
+# Saaty-Skala: Vergleichswerte von 1/9 bis 9. Im Fenster wird eine ganze Zahl
+# von -8 bis 8 gewaehlt und hier in den Vergleichswert umgerechnet.
+AHP_MAX = 9
+
+# Wichtigkeitsstufen fuer die Merkmale innerhalb einer Gruppe.
+WICHTIGKEIT = {1: "nachrangig", 2: "gering", 3: "normal", 4: "wichtig",
+               5: "sehr wichtig"}
+WICHTIGKEIT_STANDARD = 3
+
+# Zufallsindex nach Saaty, benoetigt fuer das Konsistenzverhaeltnis.
+_RANDOM_INDEX = {1: 0.0, 2: 0.0, 3: 0.58, 4: 0.90, 5: 1.12, 6: 1.24,
+                 7: 1.32, 8: 1.41, 9: 1.45, 10: 1.49, 11: 1.51, 12: 1.48,
+                 13: 1.56, 14: 1.57, 15: 1.59}
+
+
+def ahp_stufe_zu_wert(stufe):
+    """Rechnet die im Fenster gewaehlte Stufe in den Vergleichswert um.
+    Stufe 0 bedeutet gleich wichtig, positive Stufen bevorzugen das erste
+    Element, negative das zweite. Aus Stufe 2 wird also der Wert 3."""
+    stufe = int(stufe)
+    if stufe == 0:
+        return 1.0
+    betrag = min(abs(stufe) + 1, AHP_MAX)
+    return float(betrag) if stufe > 0 else 1.0 / betrag
+
+
+def ahp_prioritaeten(matrix):
+    """Prioritaeten einer Vergleichsmatrix ueber das Zeilen-geometrische Mittel.
+    Dieses Verfahren ist die uebliche Naeherung des Eigenvektors und kommt ohne
+    Eigenwertberechnung aus. Rueckgabe: Liste von Anteilen, Summe 1."""
+    n = len(matrix)
+    if n == 0:
+        return []
+    if n == 1:
+        return [1.0]
+    mittel = []
+    for zeile in matrix:
+        produkt = 1.0
+        for wert in zeile:
+            produkt *= float(wert)
+        mittel.append(produkt ** (1.0 / n))
+    summe = sum(mittel)
+    return [m / summe for m in mittel] if summe > 0 else [1.0 / n] * n
+
+
+def ahp_konsistenz(matrix, prioritaeten):
+    """Konsistenzverhaeltnis CR nach Saaty. Werte bis etwa 0,1 gelten als
+    hinreichend widerspruchsfrei. Bei bis zu zwei Elementen ist eine Matrix
+    stets konsistent, dann wird 0 zurueckgegeben."""
+    n = len(matrix)
+    if n < 3:
+        return 0.0
+    gewichtete_summe = []
+    for i in range(n):
+        s = sum(float(matrix[i][j]) * prioritaeten[j] for j in range(n))
+        gewichtete_summe.append(s)
+    lam = 0.0
+    for i in range(n):
+        if prioritaeten[i] > 0:
+            lam += gewichtete_summe[i] / prioritaeten[i]
+    lam /= n
+    ci = (lam - n) / (n - 1)
+    ri = _RANDOM_INDEX.get(n, 1.59)
+    return ci / ri if ri > 0 else 0.0
+
+
+def ahp_matrix(namen, stufen):
+    """Baut die vollstaendige Vergleichsmatrix aus den Stufen der oberen
+    Dreiecksmatrix. stufen ist ein Dict {(name_a, name_b): stufe}."""
+    n = len(namen)
+    matrix = [[1.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            wert = ahp_stufe_zu_wert(stufen.get((namen[i], namen[j]), 0))
+            matrix[i][j] = wert
+            matrix[j][i] = 1.0 / wert if wert else 1.0
+    return matrix
+
+
+def ahp_gewichte(gruppen_reihenfolge, merkmale_je_gruppe, gruppen_stufen,
+                 wichtigkeit):
+    """Fuehrt die beiden Ebenen zusammen und liefert je Merkmal ein Gewicht.
+
+    gruppen_reihenfolge : Liste der Gruppennamen
+    merkmale_je_gruppe  : Dict Gruppe -> Liste der Merkmale
+    gruppen_stufen      : Dict (Gruppe A, Gruppe B) -> Stufe des Vergleichs
+    wichtigkeit         : Dict Merkmal -> Stufe 1..5
+
+    Die Gewichte werden so skaliert, dass das kleinste genau 1,0 betraegt. In
+    die Aehnlichkeit gehen ohnehin nur die Verhaeltnisse ein, sodass die
+    Skalierung das Ergebnis nicht veraendert, die Werte aber lesbar bleiben.
+    """
+    gruppen = [g for g in gruppen_reihenfolge if merkmale_je_gruppe.get(g)]
+    if not gruppen:
+        return {}, 0.0
+    matrix = ahp_matrix(gruppen, gruppen_stufen)
+    anteile = ahp_prioritaeten(matrix)
+    cr = ahp_konsistenz(matrix, anteile)
+
+    roh = {}
+    for gruppe, anteil in zip(gruppen, anteile):
+        merkmale = merkmale_je_gruppe[gruppe]
+        stufen = [max(1, int(wichtigkeit.get(m, WICHTIGKEIT_STANDARD)))
+                  for m in merkmale]
+        summe = float(sum(stufen)) or 1.0
+        for merkmal, stufe in zip(merkmale, stufen):
+            roh[merkmal] = anteil * (stufe / summe)
+
+    kleinster = min((w for w in roh.values() if w > 0), default=0.0)
+    if kleinster <= 0:
+        return {m: 1.0 for m in roh}, cr
+    return {m: round(w / kleinster, 2) for m, w in roh.items()}, cr
 
 
 # ============================================================ ZUSTANDSLOGIK
