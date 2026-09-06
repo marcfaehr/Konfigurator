@@ -18,10 +18,22 @@ import core
 @st.cache_data
 def lade_aus_bytes(daten_bytes):
     """Liest die Morphologie aus hochgeladenen Bytes.
-    Gibt (features, types, weights) zurueck ODER loest core.GewichtFehler aus.
-    Wird ueber den Inhalt zwischengespeichert (gleiche Datei -> kein Neulesen)."""
+    Gibt (features, types, weights, gruppen) zurueck ODER loest
+    core.GewichtFehler aus. Wird ueber den Inhalt zwischengespeichert
+    (gleiche Datei -> kein Neulesen)."""
     import io
-    return core.load_morphology(io.BytesIO(daten_bytes))
+    return core.load_morphology_mit_gruppen(io.BytesIO(daten_bytes))
+
+
+def _morph_entpacken(cache):
+    """Liest den Zwischenspeicher der Morphologie. Aeltere Staende ohne
+    Merkmalsgruppen werden weiterhin verstanden."""
+    if cache is None:
+        return None
+    if len(cache) == 4:
+        return cache
+    f, t, w = cache
+    return f, t, w, None
 
 
 def init_state():
@@ -148,10 +160,14 @@ def erfassung_tabelle(state, features, merkmal, weights):
         titel.markdown(f"**{core.get_name(state, uid)}**")
         if k_ren.button("✏", key=f"ren_{uid}_{merkmal}",
                         help=f"{core.get_name(state, uid)} umbenennen"):
-            _umbenennen_dialog(state, uid)
+            st.session_state["gew_offen"] = False
+            if _fenster_frei():
+                _umbenennen_dialog(state, uid)
         if k_del.button("🗑", key=f"del_{uid}_{merkmal}",
                         help=f"{core.get_name(state, uid)} löschen"):
-            _loeschen_dialog(state, uid)
+            st.session_state["gew_offen"] = False
+            if _fenster_frei():
+                _loeschen_dialog(state, uid)
 
     if kopf[-1].button("➕", key=f"add_{merkmal}", help="Neue Betrachtungseinheit",
                        width="stretch"):
@@ -284,7 +300,11 @@ def _sidebar_hilfe(phase):
                              key=f"hilfe_{phase}", width="stretch")
         st.divider()
     if geklickt:
-        _hilfe_dialog(text)
+        # Ein anderes offenes Fenster wird dabei geschlossen, damit nicht zwei
+        # Fenster gleichzeitig geoeffnet werden.
+        st.session_state["gew_offen"] = False
+        if _fenster_frei():
+            _hilfe_dialog(text)
 
 
 HILFE_ERFASSUNG = """
@@ -353,9 +373,242 @@ Sobald alle Betrachtungseinheiten erfasst sind, geht es links über den Knopf zu
 """
 
 
-def seite_erfassung(state, features, weights):
+# Streamlit erlaubt je Durchlauf nur ein geoeffnetes Fenster. Das Merkzeichen
+# wird bei jedem Skriptdurchlauf neu gesetzt, da das Skript vollstaendig neu
+# ausgefuehrt wird.
+_FENSTER = {"auf": False}
+
+
+def _fenster_frei():
+    """True, wenn in diesem Durchlauf noch kein Fenster geoeffnet wurde.
+    Verhindert, dass zwei Fenster gleichzeitig geoeffnet werden. Das kann
+    auftreten, wenn ein Fenster durch einen Klick daneben nur in der Anzeige
+    geschlossen wurde, das zugehoerige Merkzeichen aber noch gesetzt ist."""
+    if _FENSTER["auf"]:
+        return False
+    _FENSTER["auf"] = True
+    return True
+
+
+def _ahp_zustand(features, gruppen):
+    """Arbeitsstand des Gewichtungsfensters. Wird beim ersten Aufruf aus den
+    eingelesenen Merkmalsgruppen vorbelegt. Liegen keine Gruppen vor, landen
+    zunaechst alle Merkmale in einer Gruppe."""
+    z = st.session_state.setdefault("ahp", {})
+    if not z:
+        zuordnung = {}
+        for merkmal in features:
+            zuordnung[merkmal] = (gruppen or {}).get(merkmal) or "Alle Merkmale"
+        reihenfolge = []
+        for merkmal in features:
+            if zuordnung[merkmal] not in reihenfolge:
+                reihenfolge.append(zuordnung[merkmal])
+        z.update({"zuordnung": zuordnung, "reihenfolge": reihenfolge,
+                  "stufen": {}, "wichtigkeit": {m: core.WICHTIGKEIT_STANDARD
+                                                for m in features},
+                  "schritt": 1})
+    return z
+
+
+def _ahp_merkmale_je_gruppe(z, features):
+    """Merkmale je Gruppe in der Reihenfolge des morphologischen Kastens."""
+    je_gruppe = {g: [] for g in z["reihenfolge"]}
+    for merkmal in features:
+        gruppe = z["zuordnung"].get(merkmal)
+        if gruppe in je_gruppe:
+            je_gruppe[gruppe].append(merkmal)
+    return je_gruppe
+
+
+@st.dialog("Gewichte bestimmen", width="large")
+def _gewichte_dialog(state, features, gruppen):
+    """Hierarchische Gewichtung in vier Schritten: Erklaerung, Gruppen
+    festlegen, Gruppen paarweise vergleichen, Merkmale innerhalb der Gruppen
+    bewerten. Am Ende werden die Gewichte in die Felder der Seite uebernommen.
+
+    Das Fenster bleibt ueber die Schritte hinweg offen, weil der Aufruf in
+    seite_erfassung an ein Merkzeichen gebunden ist. Ein Neuaufbau wuerde das
+    Fenster sonst bei jedem Schrittwechsel schliessen."""
+    import pandas as pd
+    z = _ahp_zustand(features, gruppen)
+    schritt = z["schritt"]
+    je_gruppe = _ahp_merkmale_je_gruppe(z, features)
+
+    st.caption(f"Schritt {schritt} von 4")
+
+    # ---------------------------------------------------------- Schritt 1
+    if schritt == 1:
+        st.markdown("**So funktioniert die Gewichtung**")
+        st.markdown(
+            "Nicht jedes Merkmal ist für Ihr Unternehmen gleich bedeutend. "
+            "Die Gewichte bestimmen, wie stark ein Merkmal in die Ähnlichkeit "
+            "zu den Typen eingeht. Statt alle Merkmale einzeln gegeneinander "
+            "abzuwägen, erfolgt die Gewichtung in zwei Ebenen.")
+        st.markdown(
+            "Auf der **oberen Ebene** werden die Merkmalsgruppen paarweise "
+            "verglichen. Auf der **unteren Ebene** bewerten Sie die Merkmale "
+            "innerhalb ihrer Gruppe. Das Gewicht eines Merkmals ergibt sich "
+            "aus dem Produkt beider Anteile. Dieses Vorgehen entspricht dem "
+            "Analytic Hierarchy Process und reduziert die Zahl der nötigen "
+            "Vergleiche erheblich.")
+        st.markdown("**Die nächsten Schritte**")
+        st.markdown(
+            "1. **Gruppen festlegen.** Sie ordnen jedes Merkmal einer Gruppe "
+            "zu und können Gruppen ergänzen oder entfernen.\n"
+            "2. **Gruppen vergleichen.** Sie geben je Paar an, welche Gruppe "
+            "wichtiger ist und um welchen Faktor.\n"
+            "3. **Merkmale bewerten.** Sie geben je Merkmal an, wie wichtig es "
+            "innerhalb seiner Gruppe ist, und übernehmen die Gewichte.")
+        st.caption("Die berechneten Gewichte werden in die Felder neben den "
+                   "Merkmalen geschrieben und lassen sich dort weiterhin von "
+                   "Hand anpassen.")
+
+    # ---------------------------------------------------------- Schritt 2
+    elif schritt == 2:
+        st.markdown("**Merkmalsgruppen festlegen**")
+        st.caption("Ordnen Sie jedes Merkmal über das Auswahlfeld einer Gruppe "
+                   "zu. Gruppen mit fünf bis sieben Merkmalen lassen sich am "
+                   "besten vergleichen.")
+        sp_neu, sp_knopf = st.columns([3, 1])
+        name = sp_neu.text_input("Neue Gruppe", key="ahp_neue_gruppe",
+                                 label_visibility="collapsed",
+                                 placeholder="Name einer neuen Gruppe")
+        if sp_knopf.button("Hinzufügen", width="stretch"):
+            name = (name or "").strip()
+            if name and name not in z["reihenfolge"]:
+                z["reihenfolge"].append(name)
+                st.rerun()
+
+        st.divider()
+        kopf = st.columns([3, 2])
+        kopf[0].caption("Merkmal")
+        kopf[1].caption("Gruppe")
+        for merkmal in features:
+            zeile = st.columns([3, 2])
+            zeile[0].markdown(merkmal)
+            aktuell = z["zuordnung"].get(merkmal)
+            if aktuell not in z["reihenfolge"]:
+                aktuell = z["reihenfolge"][0]
+            z["zuordnung"][merkmal] = zeile[1].selectbox(
+                f"Gruppe {merkmal}", options=z["reihenfolge"],
+                index=z["reihenfolge"].index(aktuell),
+                key=f"ahp_g_{merkmal}", label_visibility="collapsed")
+
+        leer = [g for g in z["reihenfolge"]
+                if not _ahp_merkmale_je_gruppe(z, features)[g]]
+        if leer:
+            st.divider()
+            st.caption("Gruppen ohne Merkmale werden übersprungen: "
+                       + ", ".join(leer))
+            if st.button("Leere Gruppen entfernen"):
+                z["reihenfolge"] = [g for g in z["reihenfolge"] if g not in leer]
+                st.rerun()
+
+    # ---------------------------------------------------------- Schritt 3
+    elif schritt == 3:
+        aktiv = [g for g in z["reihenfolge"] if je_gruppe.get(g)]
+        st.markdown("**Gruppen paarweise vergleichen**")
+        st.caption("Geben Sie je Paar an, welche Gruppe wichtiger ist und um "
+                   "welchen Faktor. Die Mitte bedeutet gleich wichtig.")
+        if len(aktiv) < 2:
+            st.caption("Für einen Vergleich sind mindestens zwei Gruppen nötig.")
+        for i in range(len(aktiv)):
+            for j in range(i + 1, len(aktiv)):
+                a, b = aktiv[i], aktiv[j]
+                st.markdown(f"{a} &nbsp;·&nbsp; {b}", unsafe_allow_html=True)
+                z["stufen"][(a, b)] = st.select_slider(
+                    f"{a} gegen {b}", options=list(range(-8, 9)),
+                    value=int(z["stufen"].get((a, b), 0)),
+                    format_func=lambda s, a=a, b=b: (
+                        "gleich wichtig" if s == 0 else
+                        f"{a} ist {abs(s)+1}-mal wichtiger" if s > 0 else
+                        f"{b} ist {abs(s)+1}-mal wichtiger"),
+                    key=f"ahp_v_{i}_{j}", label_visibility="collapsed")
+        if len(aktiv) >= 3:
+            matrix = core.ahp_matrix(aktiv, z["stufen"])
+            cr = core.ahp_konsistenz(matrix, core.ahp_prioritaeten(matrix))
+            if cr <= 0.1:
+                st.success(f"Konsistenzverhältnis {cr:.2f}. Ihre Angaben sind "
+                           "widerspruchsfrei.")
+            else:
+                st.warning(f"Konsistenzverhältnis {cr:.2f}. Werte über 0,10 "
+                           "deuten auf widersprüchliche Angaben hin. Prüfen "
+                           "Sie die Vergleiche noch einmal.")
+
+    # ---------------------------------------------------------- Schritt 4
+    else:
+        st.markdown("**Merkmale innerhalb der Gruppen bewerten**")
+        st.caption("Geben Sie je Merkmal an, wie wichtig es innerhalb seiner "
+                   "Gruppe ist. Merkmale derselben Stufe erhalten dasselbe "
+                   "Gewicht.")
+        stufen = list(core.WICHTIGKEIT)
+        for gruppe in z["reihenfolge"]:
+            merkmale = je_gruppe.get(gruppe) or []
+            if not merkmale:
+                continue
+            st.markdown(f"**{gruppe}**")
+            for merkmal in merkmale:
+                z["wichtigkeit"][merkmal] = st.select_slider(
+                    merkmal, options=stufen,
+                    value=int(z["wichtigkeit"].get(
+                        merkmal, core.WICHTIGKEIT_STANDARD)),
+                    format_func=lambda s: core.WICHTIGKEIT[s],
+                    key=f"ahp_w_{merkmal}")
+            st.divider()
+
+        gewichte, _cr = core.ahp_gewichte(z["reihenfolge"], je_gruppe,
+                                          z["stufen"], z["wichtigkeit"])
+        st.markdown("**Ergebnis**")
+        st.dataframe(
+            pd.DataFrame([{"Merkmalsgruppe": z["zuordnung"][m], "Merkmal": m,
+                           "Gewicht": gewichte.get(m)} for m in features]),
+            hide_index=True, width="stretch")
+        st.caption("Die Gewichte sind so skaliert, dass das kleinste den Wert "
+                   "1 erhält. In die Ähnlichkeit gehen nur die Verhältnisse "
+                   "ein, sodass die Skalierung das Ergebnis nicht verändert.")
+
+    # ---------------------------------------------------------- Navigation
+    st.divider()
+    sp_zurueck, sp_abbruch, sp_weiter = st.columns(3)
+    if schritt > 1 and sp_zurueck.button("← Zurück", width="stretch"):
+        z["schritt"] = schritt - 1
+        st.rerun()
+    if sp_abbruch.button("Abbrechen", width="stretch"):
+        st.session_state["gew_offen"] = False
+        st.rerun()
+    if schritt < 4:
+        if sp_weiter.button("Weiter →", type="primary", width="stretch"):
+            z["schritt"] = schritt + 1
+            st.rerun()
+    else:
+        if sp_weiter.button("Gewichte übernehmen", type="primary",
+                            width="stretch"):
+            gewichte, _ = core.ahp_gewichte(z["reihenfolge"], je_gruppe,
+                                            z["stufen"], z["wichtigkeit"])
+            for merkmal, wert in gewichte.items():
+                core.set_gewicht(state, merkmal, wert)
+            # Der Zaehler geht in den Schluessel der Eingabefelder ein. Wird er
+            # erhoeht, bauen sich die Felder aus den neuen Werten neu auf. Ein
+            # Loeschen der Schluessel waere hier nicht moeglich, da die Felder
+            # im selben Durchlauf bereits gezeichnet wurden.
+            st.session_state["gw_gen"] = st.session_state.get("gw_gen", 0) + 1
+            st.session_state["gew_offen"] = False
+            st.rerun()
+
+
+def seite_erfassung(state, features, weights, gruppen=None):
     """Schritt 1+3 vereint: gemeinsame Erfassung von Ist, Potenzial, Ausschluss."""
     st.title("Zustandsaufnahme")
+    if st.button("⚖  Gewichte bestimmen",
+                 help="Merkmalsgewichte über eine hierarchische Gewichtung "
+                      "bestimmen. Die Werte lassen sich anschließend weiterhin "
+                      "von Hand anpassen."):
+        st.session_state["gew_offen"] = True
+    # Das Fenster wird bei jedem Durchlauf erneut geoeffnet, solange das
+    # Merkzeichen gesetzt ist. Andernfalls wuerde es beim Wechsel zwischen den
+    # Schritten geschlossen, da ein Neuaufbau ein offenes Fenster beendet.
+    if st.session_state.get("gew_offen") and _fenster_frei():
+        _gewichte_dialog(state, features, gruppen)
     st.divider()
 
     for idx, merkmal in enumerate(features):
@@ -367,7 +620,8 @@ def seite_erfassung(state, features, weights):
             g = st.number_input(
                 "Gewicht", min_value=1.0,
                 value=float(core.get_gewicht(state, merkmal)),
-                step=0.5, key=f"gw_{merkmal}",
+                step=0.5,
+                key=f"gw_{st.session_state.get('gw_gen', 0)}_{merkmal}",
                 help="Relative Wichtigkeit für die Ähnlichkeit: 1 = normal, "
                      "2 = doppelt so wichtig, 1,5 = anderthalbfach usw. "
                      "Gilt für das Merkmal über alle Betrachtungseinheiten.")
@@ -1216,7 +1470,9 @@ def _soll_knopf(state, uid, typ, merkmal, opt, soll_wert, ist_wert, profil, spal
                 core.set_kosten(state, uid, typ, merkmal, None)
                 st.rerun()
             else:
-                _aufwand_dialog(state, uid, typ, merkmal, opt, opt in profil)
+                if _fenster_frei():
+                    _aufwand_dialog(state, uid, typ, merkmal, opt,
+                                    opt in profil)
 
 
 def _nichts_anstreben_knopf(state, uid, typ, merkmal, soll_wert):
@@ -2187,7 +2443,8 @@ def _harmonisierung(state, features, types, weights):
                              placeholder="Änderungen wählen")
     if len(auswahl) >= 2:
         if st.button("Zusammenlegen", type="primary", key="harm_merge"):
-            _synergie_dialog(state, [label[a] for a in auswahl], massnahmen)
+            if _fenster_frei():
+                _synergie_dialog(state, [label[a] for a in auswahl], massnahmen)
     elif len(auswahl) == 1:
         st.caption("Bitte mindestens zwei Änderungen wählen.")
 
@@ -2530,7 +2787,7 @@ state = st.session_state.state
 # Das Hochladefeld erscheint nur in der Zustandserfassung. Sobald eine gueltige
 # Morphologie geladen ist, wird sie in st.session_state.morphologie gehalten und
 # in den folgenden Schritten von dort genutzt (ohne erneutes Hochladefeld).
-features = types = weights = None
+features = types = weights = gruppen = None
 quelle_ok = False
 gewicht_problem = None
 morph_cache = st.session_state.get("morphologie")
@@ -2543,22 +2800,23 @@ if state["phase"] == "konfiguration":
     )
     try:
         if hochgeladen is not None:
-            features, types, weights = lade_aus_bytes(hochgeladen.getvalue())
-            st.session_state.morphologie = (features, types, weights)
+            features, types, weights, gruppen = lade_aus_bytes(
+                hochgeladen.getvalue())
+            st.session_state.morphologie = (features, types, weights, gruppen)
             st.sidebar.caption(f"Geladen: {hochgeladen.name}")
             quelle_ok = True
         elif morph_cache is not None:
-            features, types, weights = morph_cache
+            features, types, weights, gruppen = _morph_entpacken(morph_cache)
             quelle_ok = True
         else:
             st.info("Bitte links eine Excel-Morphologie hochladen, um zu starten.")
     except core.GewichtFehler as e:
         # Gewichte fehlerhaft. Morphologie ist trotzdem da (im Fehler mitgegeben).
-        gewicht_problem = (e.probleme, e.features, e.types)
+        gewicht_problem = (e.probleme, e.features, e.types, e.gruppen)
 
     # Gewichtsfehler behandeln (Wahl anbieten).
     if gewicht_problem is not None:
-        probleme, feat_roh, typ_roh = gewicht_problem
+        probleme, feat_roh, typ_roh, grp_roh = gewicht_problem
         st.error("Die Gewichtsspalte enthält fehlerhafte Werte:")
         for merkmal, grund in probleme:
             st.write(f"- **{merkmal}**: {grund}")
@@ -2568,15 +2826,15 @@ if state["phase"] == "konfiguration":
             st.session_state.ignoriere_gewichte = True
             st.rerun()
         if st.session_state.get("ignoriere_gewichte"):
-            features, types, weights = feat_roh, typ_roh, None
-            st.session_state.morphologie = (features, types, weights)
+            features, types, weights, gruppen = feat_roh, typ_roh, None, grp_roh
+            st.session_state.morphologie = (features, types, weights, gruppen)
             quelle_ok = True
             gewicht_problem = None
             st.info("Es wird ohne Gewichtung gerechnet (alle Merkmale gleich).")
 else:
     # Spaetere Schritte: Morphologie aus dem Cache, kein Hochladefeld noetig.
     if morph_cache is not None:
-        features, types, weights = morph_cache
+        features, types, weights, gruppen = _morph_entpacken(morph_cache)
         quelle_ok = True
 
 # Ohne gueltige Quelle hier stoppen.
@@ -2600,7 +2858,7 @@ sidebar_navigation(state, features, types)
 
 # Hauptbereich je nach Phase.
 if state["phase"] == "konfiguration":
-    seite_erfassung(state, features, weights)
+    seite_erfassung(state, features, weights, gruppen)
 elif state["phase"] == "ergebnis_soll":
     seite_ergebnis_soll(state, features, types, weights)
 elif state["phase"] == "detaillierung":
