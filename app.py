@@ -3,13 +3,16 @@ Baustein 4: Konfigurationsphase abschliessen.
 
 Neu gegenueber Baustein 3:
   - Seitenleiste mit Fortschritt je Einheit (offene Merkmale via core.open_count)
-  - Knopf "Auswertung starten", nur aktiv wenn ALLE Einheiten vollstaendig sind
-    (core.is_complete). Setzt dann state["phase"] = "ergebnis".
+  - Knopf "Weiter zur Aehnlichkeitsbewertung", nur aktiv wenn ALLE Einheiten
+    vollstaendig sind (core.is_complete). Setzt dann state["phase"].
   - Platzhalter-Ergebnisseite (die echte Berechnung kommt im naechsten Schritt).
 
 Start:  streamlit run app.py
 core.py und 4_typen_morphologie.xlsx muessen im selben Ordner liegen.
 """
+
+import datetime
+import hashlib
 
 import streamlit as st
 import core
@@ -631,12 +634,99 @@ def seite_erfassung(state, features, weights, gruppen=None):
             st.divider()
 
 
-def sidebar_navigation(state, features, types):
+def _stand_dateiname():
+    """Dateiname fuer den gesicherten Stand, mit Datum, damit sich mehrere
+    Staende unterscheiden lassen."""
+    return "konfigurator_stand_%s.json" % datetime.date.today().isoformat()
+
+
+def _sidebar_speichern(state, features, types, weights, gruppen):
+    """Knopf zum Sichern des aktuellen Stands. Steht in jedem Schritt an
+    derselben Stelle der Seitenleiste, direkt unter dem Hilfe-Knopf."""
+    with st.sidebar:
+        st.markdown(
+            ":green[**Empfohlen**]",
+            help="Sichern Sie Ihren Stand, wenn Sie den Durchlauf nicht in "
+                 "einem Zug abschließen. Die Datei enthält alle bisherigen "
+                 "Angaben einschließlich der Morphologie. Beim nächsten Start "
+                 "laden Sie sie links oben hoch und fahren genau an der Stelle "
+                 "fort, an der Sie aufgehört haben. Eine Excel-Datei ist dann "
+                 "nicht mehr nötig.")
+        st.download_button(
+            "💾  Stand sichern",
+            data=core.zustand_zu_json(
+                state, features, types, weights, gruppen,
+                erstellt=datetime.datetime.now().isoformat(timespec="seconds")),
+            file_name=_stand_dateiname(), mime="application/json",
+            width="stretch", key=f"stand_sichern_{state['phase']}")
+        info = st.session_state.get("stand_info")
+        if info:
+            st.caption(f"Fortgesetzt aus: {info['name']}")
+            if info.get("hinweise"):
+                with st.expander("Nicht übernommene Angaben "
+                                 f"({len(info['hinweise'])})"):
+                    for h in info["hinweise"]:
+                        st.write("- " + h)
+        st.divider()
+
+
+def _stand_einlesen(datei):
+    """Liest eine gesicherte Standdatei und merkt sie zur Uebernahme vor.
+    Die Uebernahme selbst erfolgt in _stand_anwenden am Anfang des naechsten
+    Durchlaufs, damit keine bereits gezeichneten Eingabefelder die geladenen
+    Angaben ueberschreiben.
+    Rueckgabe: True, wenn der Stand bereits uebernommen ist (dann geht es
+    normal weiter), False bei einer abgelehnten Datei."""
+    rohdaten = datei.getvalue()
+    kennung = hashlib.sha256(rohdaten).hexdigest()
+    if st.session_state.get("stand_quelle") == kennung:
+        return True            # schon uebernommen, nichts weiter zu tun
+    try:
+        # Der Fingerabdruck wird hier nicht gebraucht, weil die Morphologie
+        # aus derselben Datei kommt und daher immer passt.
+        zustand, features, types, weights, gruppen, _fingerabdruck = \
+            core.stand_aus_json(rohdaten)
+    except core.SpeicherFehler as e:
+        st.sidebar.error(str(e))
+        return False
+    hinweise = core.stand_pruefen(zustand, features, types)
+    st.session_state["stand_offen"] = {
+        "zustand": zustand,
+        "morphologie": (features, types, weights, gruppen),
+        "kennung": kennung,
+        "name": datei.name,
+        "hinweise": hinweise,
+    }
+    st.rerun()
+
+
+def _stand_anwenden():
+    """Uebernimmt einen vorgemerkten Stand in die Sitzung. Wird als Erstes im
+    Durchlauf aufgerufen, bevor irgendein Eingabefeld gezeichnet ist. Die
+    Sitzung wird dabei vollstaendig geleert, damit keine Feldinhalte des
+    vorherigen Besuchs stehen bleiben."""
+    offen = st.session_state.get("stand_offen")
+    if not offen:
+        return
+    for schluessel in list(st.session_state.keys()):
+        if schluessel != "stand_offen":
+            del st.session_state[schluessel]
+    st.session_state.state = offen["zustand"]
+    st.session_state.morphologie = offen["morphologie"]
+    st.session_state.stand_quelle = offen["kennung"]
+    st.session_state.stand_info = {"name": offen["name"],
+                                   "hinweise": offen["hinweise"]}
+    del st.session_state["stand_offen"]
+
+
+def sidebar_navigation(state, features, types, weights=None, gruppen=None):
     """Phasenabhaengige Seitenleiste: Navigation (Weiter/Zurueck) und Hinweis,
     was zum Weiterkommen noch offen ist. Das Hochladefeld und der volle
-    Erfassungsstatus erscheinen nur in Schritt 1 (Zustandsaufnahme)."""
+    Erfassungsstatus erscheinen nur in Schritt 1 (Zustandsaufnahme). Der Knopf
+    zum Sichern des Stands erscheint in jedem Schritt."""
     phase = state["phase"]
     _sidebar_hilfe(phase)
+    _sidebar_speichern(state, features, types, weights, gruppen)
     if phase == "konfiguration":
         _sidebar_erfassung(state, features)
     elif phase == "ergebnis_soll":
@@ -722,42 +812,31 @@ def _sidebar_massnahmen(state):
             st.rerun()
         st.divider()
         st.caption("Die Änderungen ergeben sich aus dem Vergleich von Ist und "
-                   "Ziel des Zieltyps. Führe sie hier unternehmensweit zusammen, "
-                   "harmonisiere sie und priorisiere die Betrachtungseinheiten.")
+                   "Ziel des Zieltyps. Hier führen Sie sie unternehmensweit "
+                   "zusammen, harmonisieren sie und priorisieren die "
+                   "Betrachtungseinheiten.")
 
 
 def _sidebar_erfassung(state, features):
-    """Seitenleiste: Stand je Einheit + Auswertungsknopf."""
+    """Seitenleiste: Stand je Einheit + Navigation. Der Knopf zum
+    Weitergehen steht unter derselben Ueberschrift wie in allen anderen
+    Schritten."""
     with st.sidebar:
-        st.header("Fortschritt")
-
         if not state["units"]:
+            st.header("Fortschritt")
             st.caption("Noch keine Betrachtungseinheit angelegt.")
             return
 
-        gesamt = len(features)
-        # Ein Merkmal ist "versorgt", wenn es entweder ein Ist hat ODER auf
-        # 'Ist unbekannt' steht. Genau diese beiden Faelle erlauben das Weitergehen.
-        for uid in state["units"]:
-            versorgt = sum(
-                1 for m in features
-                if core.get_choice(state, uid, m) is not core.OFFEN
-                or core.get_welt(state, uid, m) == core.WELT_IST_UNBEKANNT
-            )
-            offen = gesamt - versorgt
-            st.progress(versorgt / gesamt,
-                        text=f"{core.get_name(state, uid)}: {versorgt}/{gesamt} "
-                             "Merkmale bearbeitet"
-                             + ("  ✓" if offen == 0 else f"  ({offen} offen)"))
-
-        st.divider()
+        # Der Knopf zum Weitergehen steht zuerst, damit er unabhaengig von der
+        # Anzahl der Betrachtungseinheiten immer ohne Scrollen sichtbar ist.
+        st.header("Nächster Schritt")
 
         # Harte Sperre: fuer jedes Merkmal mit Welt 'Ist bekannt' muss ein Ist
         # gesetzt sein. Potenziale/Ausschluesse sind optional.
         probleme = core.erfassung_unvollstaendig(state, features)
 
-        if st.button("Auswertung starten", type="primary", width="stretch",
-                     disabled=bool(probleme)):
+        if st.button("Weiter zur Ähnlichkeitsbewertung →", type="primary",
+                     width="stretch", disabled=bool(probleme)):
             state["phase"] = "ergebnis_soll"
             st.rerun()
 
@@ -773,9 +852,28 @@ def _sidebar_erfassung(state, features):
             )
             st.warning(
                 "Bevor es weitergeht, fehlt noch etwas:\n\n" + zeilen
-                + "\n\nSetze dort entweder ein Ist, oder stelle das Merkmal auf "
-                "'Ist unbekannt', wenn Sie die aktuelle Ausprägung nicht kennen."
+                + "\n\nSetzen Sie dort entweder ein Ist, oder stellen Sie das "
+                "Merkmal auf 'Ist unbekannt', wenn Sie die aktuelle "
+                "Ausprägung nicht kennen."
             )
+
+        st.divider()
+        st.header("Fortschritt")
+
+        gesamt = len(features)
+        # Ein Merkmal ist "versorgt", wenn es entweder ein Ist hat ODER auf
+        # 'Ist unbekannt' steht. Genau diese beiden Faelle erlauben das Weitergehen.
+        for uid in state["units"]:
+            versorgt = sum(
+                1 for m in features
+                if core.get_choice(state, uid, m) is not core.OFFEN
+                or core.get_welt(state, uid, m) == core.WELT_IST_UNBEKANNT
+            )
+            offen = gesamt - versorgt
+            st.progress(versorgt / gesamt,
+                        text=f"{core.get_name(state, uid)}: {versorgt}/{gesamt} "
+                             "Merkmale bearbeitet"
+                             + ("  ✓" if offen == 0 else f"  ({offen} offen)"))
 
 
 def seite_konfiguration(state, features, weights):
@@ -1330,7 +1428,7 @@ def _aufwand_dialog(state, uid, typ, merkmal, ziel_opt, im_profil):
     dauer = st.number_input("Dauer in Wochen (optional)", min_value=0.0,
                             value=core.get_dauer(state, uid, typ, merkmal),
                             step=1.0, format="%.0f",
-                            help="Leer lassen, wenn nicht abschaetzbar.")
+                            help="Leer lassen, wenn nicht abschätzbar.")
     sp1, sp2 = st.columns(2)
     if sp1.button("Speichern", type="primary", width="stretch",
                   disabled=(stufe is None)):
@@ -2047,7 +2145,7 @@ def _portfolio_matrix(punkte):
         "Die Reihenfolge richtet sich zuerst nach dem Ähnlichkeitsgewinn und bei "
         "gleichem Gewinn nach dem Aufwand. Zuerst kommen Handlungsfelder mit hohem "
         "Gewinn und geringem Aufwand, danach solche mit hohem Gewinn und hohem "
-        "Aufwand, anschliessend solche mit geringem Gewinn und geringem Aufwand und "
+        "Aufwand, anschließend solche mit geringem Gewinn und geringem Aufwand und "
         "zuletzt solche mit geringem Gewinn und hohem Aufwand. Punkte mit gleichem "
         "Aufwand und Gewinn sind zusammengefasst.")
 
@@ -2086,8 +2184,8 @@ def _paretokurve(punkte):
             st.altair_chart(diagramm, use_container_width=True)
     except Exception:
         st.dataframe(df, hide_index=True, width="stretch")
-    st.caption("Wenige hoch gewichtete Handlungsfelder tragen den Grossteil der "
-               "Annaeherung an die Zieltypen. Die flach auslaufenden Handlungsfelder "
+    st.caption("Wenige hoch gewichtete Handlungsfelder tragen den Großteil der "
+               "Annäherung an die Zieltypen. Die flach auslaufenden Handlungsfelder "
                "sind nachrangig.")
 
 
@@ -2780,6 +2878,10 @@ def seite_massnahmen(state, features, types, weights):
                "Druckfunktion als PDF speichern.")
 
 
+# Ein vorgemerkter Stand wird als Erstes uebernommen, noch vor init_state und
+# bevor ein Eingabefeld gezeichnet ist.
+_stand_anwenden()
+
 init_state()
 state = st.session_state.state
 
@@ -2793,13 +2895,29 @@ gewicht_problem = None
 morph_cache = st.session_state.get("morphologie")
 
 if state["phase"] == "konfiguration":
-    st.sidebar.header("Morphologie")
+    st.sidebar.header("Start")
     hochgeladen = st.sidebar.file_uploader(
-        "Excel-Morphologie laden (.xlsx)", type=["xlsx"],
-        help="Datei mit Merkmalen, Ausprägungen, Typprofilen und (optional) Gewichten."
+        "Morphologie oder gesicherten Stand laden", type=["xlsx", "json"],
+        help="Für einen neuen Durchlauf eine Excel-Datei (.xlsx) mit Merkmalen, "
+             "Ausprägungen, Typprofilen und (optional) Gewichten. Um einen "
+             "früheren Durchlauf fortzusetzen, die zuvor über "
+             "„Stand sichern“ erzeugte Datei (.json). Diese enthält die "
+             "Morphologie bereits, eine Excel-Datei ist dann nicht nötig."
     )
+    # Die Endung entscheidet, was gemeint ist: .json ist ein gesicherter Stand,
+    # .xlsx eine Morphologie fuer einen neuen Durchlauf.
+    ist_stand = (hochgeladen is not None
+                 and hochgeladen.name.lower().endswith(".json"))
     try:
-        if hochgeladen is not None:
+        if ist_stand:
+            # _stand_einlesen kehrt nur zurueck, wenn der Stand bereits
+            # uebernommen wurde oder die Datei abgelehnt wurde.
+            if _stand_einlesen(hochgeladen):
+                entpackt = _morph_entpacken(st.session_state.get("morphologie"))
+                if entpackt is not None:
+                    features, types, weights, gruppen = entpackt
+                    quelle_ok = True
+        elif hochgeladen is not None:
             features, types, weights, gruppen = lade_aus_bytes(
                 hochgeladen.getvalue())
             st.session_state.morphologie = (features, types, weights, gruppen)
@@ -2809,7 +2927,9 @@ if state["phase"] == "konfiguration":
             features, types, weights, gruppen = _morph_entpacken(morph_cache)
             quelle_ok = True
         else:
-            st.info("Bitte links eine Excel-Morphologie hochladen, um zu starten.")
+            st.info("Bitte laden Sie links eine Excel-Morphologie hoch, um zu "
+                    "starten. Haben Sie einen früheren Durchlauf gesichert, "
+                    "laden Sie dort stattdessen Ihre Standdatei hoch.")
     except core.GewichtFehler as e:
         # Gewichte fehlerhaft. Morphologie ist trotzdem da (im Fehler mitgegeben).
         gewicht_problem = (e.probleme, e.features, e.types, e.gruppen)
@@ -2854,7 +2974,7 @@ if "zu_loeschen" in st.session_state:
     st.session_state.pop("warte_bestaetigung", None)
 
 # Seitenleiste: phasenabhaengige Navigation und Hinweise.
-sidebar_navigation(state, features, types)
+sidebar_navigation(state, features, types, weights, gruppen)
 
 # Hauptbereich je nach Phase.
 if state["phase"] == "konfiguration":
