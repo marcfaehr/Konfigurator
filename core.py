@@ -2090,3 +2090,413 @@ def massnahmen_nach_phase(state, uid, felder):
         phase = get_massnahme(state, uid, f["merkmal"])["phase"] or PHASEN[-1]
         gruppen.setdefault(phase, []).append(f)
     return gruppen
+
+
+# ==== ZWISCHENSPEICHERN: STAND SICHERN UND WIEDER LADEN ====================
+# Der Konfigurator laeuft in einer Sitzung im Browser. Wer ihn nicht in einem
+# Rutsch durchlaufen kann, braucht einen Weg, den eigenen Stand zu sichern und
+# spaeter fortzusetzen. Dafuer wird der komplette Zustand GEMEINSAM MIT DER
+# MORPHOLOGIE in eine einzige JSON-Datei geschrieben. Beim Wiedereinstieg
+# genuegt daher diese eine Datei, die Excel ist nicht noetig.
+#
+# Warum JSON und nicht CSV: der Zustand ist keine Tabelle, sondern eine
+# verschachtelte Struktur mit Mengen (potential, ausschluss, buendel),
+# dreistufigen Dicts (soll, aufwand, kosten, dauer je Einheit und Typ) sowie
+# Dicts mit Tupel-Schluesseln (buendel_werte, nwa_werte, hf_massnahmen).
+# CSV kann davon nichts abbilden. JSON kann es bis auf Mengen und Tupel, die
+# unten mit einer kleinen, umkehrbaren Kennzeichnung versehen werden.
+
+import hashlib
+import json
+
+# Version des Dateiformats. Steigt nur, wenn sich der Aufbau so aendert, dass
+# aeltere Dateien nicht mehr gelesen werden koennen.
+SPEICHER_FORMAT = 1
+SPEICHER_WERKZEUG = "Konfigurator Auftragsabwicklung"
+
+
+class SpeicherFehler(Exception):
+    """Die Datei konnte nicht als gesicherter Stand gelesen werden.
+    Der Text ist fuer den Anwender gedacht und wird direkt angezeigt."""
+
+
+# --- Umwandlung der Python-Typen, die JSON nicht kennt --------------------
+# Gekennzeichnet wird mit einem Spezialschluessel, der sich nie mit echten
+# Daten verwechseln laesst, weil alle echten Schluessel Merkmalsnamen,
+# Typnamen oder feste Bezeichner sind.
+
+_MARKE_SET = "~set"
+_MARKE_FROZENSET = "~frozenset"
+_MARKE_TUPEL = "~tupel"
+_MARKE_PAARE = "~paare"      # Dict, dessen Schluessel keine Strings sind
+_MARKEN = (_MARKE_SET, _MARKE_FROZENSET, _MARKE_TUPEL, _MARKE_PAARE)
+
+
+def _sortierbar(werte):
+    """Sortiert eine Menge, damit die Datei bei gleichem Zustand gleich
+    aussieht. Bei gemischten Typen wird unsortiert zurueckgegeben, denn die
+    Reihenfolge einer Menge traegt keine Bedeutung."""
+    try:
+        return sorted(werte, key=lambda w: (str(type(w)), str(w)))
+    except TypeError:
+        return list(werte)
+
+
+def _kodieren(wert):
+    """Macht einen beliebigen Zustandswert JSON-faehig. Rekursiv."""
+    if isinstance(wert, frozenset):
+        return {_MARKE_FROZENSET: [_kodieren(w) for w in _sortierbar(wert)]}
+    if isinstance(wert, set):
+        return {_MARKE_SET: [_kodieren(w) for w in _sortierbar(wert)]}
+    if isinstance(wert, tuple):
+        return {_MARKE_TUPEL: [_kodieren(w) for w in wert]}
+    if isinstance(wert, dict):
+        # Nur ein Dict mit ausschliesslich unverfaenglichen String-Schluesseln
+        # darf als normales JSON-Objekt geschrieben werden. Alles andere wird
+        # als Liste von Paaren gesichert, damit die Schluessel erhalten bleiben.
+        einfach = all(isinstance(k, str) and k not in _MARKEN
+                      for k in wert.keys())
+        if einfach:
+            return {k: _kodieren(v) for k, v in wert.items()}
+        return {_MARKE_PAARE: [[_kodieren(k), _kodieren(v)]
+                               for k, v in wert.items()]}
+    if isinstance(wert, (list, tuple)):
+        return [_kodieren(w) for w in wert]
+    if isinstance(wert, (str, int, float, bool)) or wert is None:
+        return wert
+    # Unbekannter Typ: als Text sichern, damit die Datei nicht unbrauchbar wird.
+    return str(wert)
+
+
+def _dekodieren(wert):
+    """Umkehrung von _kodieren. Rekursiv."""
+    if isinstance(wert, dict):
+        if _MARKE_FROZENSET in wert and len(wert) == 1:
+            return frozenset(_dekodieren(w) for w in wert[_MARKE_FROZENSET])
+        if _MARKE_SET in wert and len(wert) == 1:
+            return set(_dekodieren(w) for w in wert[_MARKE_SET])
+        if _MARKE_TUPEL in wert and len(wert) == 1:
+            return tuple(_dekodieren(w) for w in wert[_MARKE_TUPEL])
+        if _MARKE_PAARE in wert and len(wert) == 1:
+            return {_dekodieren(k): _dekodieren(v)
+                    for k, v in wert[_MARKE_PAARE]}
+        return {k: _dekodieren(v) for k, v in wert.items()}
+    if isinstance(wert, list):
+        return [_dekodieren(w) for w in wert]
+    return wert
+
+
+# --- Fingerabdruck der Morphologie ----------------------------------------
+
+def morphologie_fingerabdruck(features, types):
+    """Kurzer Pruefwert ueber Merkmale, Auspraegungen und Typprofile. Dient
+    allein dazu, eine Abweichung zu erkennen, wenn ein Stand doch einmal mit
+    einer anderen Morphologie zusammentrifft."""
+    kern = {
+        "merkmale": {m: list(a) for m, a in (features or {}).items()},
+        "typen": {t: {m: sorted(a) for m, a in profil.items()}
+                  for t, profil in (types or {}).items()},
+    }
+    text = json.dumps(kern, sort_keys=True, ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+# --- Sichern ---------------------------------------------------------------
+
+def zustand_zu_json(state, features, types, weights=None, gruppen=None,
+                    erstellt=None):
+    """Schreibt Morphologie und Zustand in einen JSON-Text (eine Datei, die
+    alles enthaelt, was ein Durchlauf braucht). 'erstellt' ist ein optionaler
+    Zeitstempel als Text, der nur zur Information in der Datei steht."""
+    daten = {
+        "format": SPEICHER_FORMAT,
+        "werkzeug": SPEICHER_WERKZEUG,
+        "erstellt": erstellt or "",
+        "morphologie": {
+            "features": {m: list(a) for m, a in (features or {}).items()},
+            "types": {t: {m: sorted(a) for m, a in profil.items()}
+                      for t, profil in (types or {}).items()},
+            "weights": (None if weights is None
+                        else {m: float(w) for m, w in weights.items()
+                              if w is not None}),
+            "gruppen": (None if gruppen is None else dict(gruppen)),
+            "fingerabdruck": morphologie_fingerabdruck(features, types),
+        },
+        "zustand": _kodieren(state),
+    }
+    return json.dumps(daten, ensure_ascii=False, indent=1)
+
+
+# --- Laden -----------------------------------------------------------------
+
+def _morphologie_aus_daten(roh):
+    """Baut aus dem Dateiabschnitt 'morphologie' die vier Rueckgabewerte, die
+    auch load_morphology_mit_gruppen liefert. Die Reihenfolge der Merkmale und
+    Auspraegungen bleibt erhalten, weil JSON-Objekte ihre Reihenfolge behalten
+    und OrderedDict sie festhaelt."""
+    if not isinstance(roh, dict):
+        raise SpeicherFehler("In der Datei fehlt der Abschnitt mit der Morphologie.")
+    roh_features = roh.get("features")
+    roh_types = roh.get("types")
+    if not isinstance(roh_features, dict) or not roh_features:
+        raise SpeicherFehler("In der Datei sind keine Merkmale enthalten.")
+    if not isinstance(roh_types, dict) or not roh_types:
+        raise SpeicherFehler("In der Datei sind keine Auftragsabwicklungstypen "
+                             "enthalten.")
+    features = OrderedDict((m, list(a)) for m, a in roh_features.items())
+    types = OrderedDict(
+        (t, {m: set(a) for m, a in profil.items()})
+        for t, profil in roh_types.items())
+    weights = roh.get("weights")
+    if weights is not None:
+        weights = {m: float(w) for m, w in weights.items() if w is not None}
+    gruppen = roh.get("gruppen")
+    if gruppen is not None:
+        gruppen = dict(gruppen)
+    return features, types, weights, gruppen
+
+
+def stand_aus_json(text):
+    """Liest einen gesicherten Stand. Rueckgabe:
+    (zustand, features, types, weights, gruppen, fingerabdruck).
+    Wirft SpeicherFehler mit einem fuer den Anwender lesbaren Text."""
+    if isinstance(text, bytes):
+        try:
+            text = text.decode("utf-8")
+        except UnicodeDecodeError:
+            raise SpeicherFehler(
+                "Die Datei ist keine Textdatei und kann nicht gelesen werden.")
+    try:
+        daten = json.loads(text)
+    except (ValueError, TypeError):
+        raise SpeicherFehler(
+            "Die Datei ist keine gültige Standdatei des Konfigurators.")
+    if not isinstance(daten, dict) or "zustand" not in daten:
+        raise SpeicherFehler(
+            "Die Datei enthält keinen gesicherten Stand des Konfigurators.")
+
+    format_nr = daten.get("format")
+    if not isinstance(format_nr, int):
+        raise SpeicherFehler("In der Datei fehlt die Formatangabe.")
+    if format_nr > SPEICHER_FORMAT:
+        raise SpeicherFehler(
+            "Die Datei stammt aus einer neueren Version des Konfigurators "
+            "(Format %s, gelesen wird bis Format %s)."
+            % (format_nr, SPEICHER_FORMAT))
+
+    features, types, weights, gruppen = _morphologie_aus_daten(
+        daten.get("morphologie"))
+
+    zustand = _dekodieren(daten.get("zustand"))
+    if not isinstance(zustand, dict):
+        raise SpeicherFehler("Der gesicherte Stand in der Datei ist beschädigt.")
+
+    # Fehlende Schluessel aus dem leeren Zustand vorbelegen. Dadurch bleibt eine
+    # heute gesicherte Datei auch dann ladbar, wenn das Werkzeug spaeter um
+    # weitere Schluessel erweitert wird.
+    vollstaendig = empty_state()
+    vollstaendig.update(zustand)
+
+    return (vollstaendig, features, types, weights, gruppen,
+            (daten.get("morphologie") or {}).get("fingerabdruck"))
+
+
+# --- Pruefen und bereinigen ------------------------------------------------
+
+def stand_pruefen(state, features, types):
+    """Prueft einen geladenen Stand gegen die Morphologie und entfernt alles,
+    was dort nicht vorkommt. Fehlende Angaben werden ergaenzt, damit jede
+    Betrachtungseinheit fuer jedes Merkmal einen Eintrag besitzt.
+    Rueckgabe: Liste von Hinweisen ueber das Verworfene (leer = alles passte).
+    Der Stand wird dabei an Ort und Stelle veraendert."""
+    hinweise = []
+    merkmale = set(features.keys())
+    typnamen = set(types.keys())
+
+    def erlaubt(merkmal, wert):
+        """True, wenn der Wert fuer dieses Merkmal zulaessig ist."""
+        if wert is OFFEN or wert == NICHTS_ANSTREBEN:
+            return True
+        return wert in features.get(merkmal, [])
+
+    # 1) Einheitenliste bereinigen (nur Einheiten mit Ist-Ebene bleiben).
+    state["units"] = [u for u in state.get("units", [])
+                      if isinstance(u, str)]
+    einheiten = set(state["units"])
+    for ebene in ("matrix", "potential", "ausschluss", "engere_auswahl",
+                  "zieltyp", "soll", "aufwand", "kosten", "dauer", "welt",
+                  "massnahmen", "namen"):
+        state.setdefault(ebene, {})
+        for uid in list(state[ebene].keys()):
+            if uid not in einheiten:
+                del state[ebene][uid]
+
+    # 2) Je Einheit: Ist, Potenzial, Ausschluss, Welt.
+    for uid in state["units"]:
+        ist = state["matrix"].setdefault(uid, {})
+        for m in list(ist.keys()):
+            if m not in merkmale:
+                del ist[m]
+                hinweise.append("Merkmal '%s' ist in der Morphologie nicht "
+                                "vorhanden und wurde entfernt." % m)
+            elif not erlaubt(m, ist[m]):
+                hinweise.append("Ausprägung '%s' bei Merkmal '%s' ist in der "
+                                "Morphologie nicht vorhanden und wurde "
+                                "entfernt." % (ist[m], m))
+                ist[m] = OFFEN
+        for m in features:
+            ist.setdefault(m, OFFEN)
+
+        for ebene in ("potential", "ausschluss"):
+            je_merkmal = state[ebene].setdefault(uid, {})
+            for m in list(je_merkmal.keys()):
+                if m not in merkmale:
+                    del je_merkmal[m]
+                    continue
+                gueltig = {a for a in je_merkmal[m]
+                           if a in features.get(m, [])}
+                if len(gueltig) != len(je_merkmal[m]):
+                    hinweise.append("Bei Merkmal '%s' wurden Angaben entfernt, "
+                                    "die es in der Morphologie nicht gibt." % m)
+                je_merkmal[m] = gueltig
+            for m in features:
+                je_merkmal.setdefault(m, set())
+
+        welt = state["welt"].setdefault(uid, {})
+        for m in list(welt.keys()):
+            if m not in merkmale or welt[m] not in (WELT_IST_BEKANNT,
+                                                    WELT_IST_UNBEKANNT):
+                del welt[m]
+        for m in features:
+            welt.setdefault(m, WELT_IST_BEKANNT)
+
+        # 3) Engere Auswahl und Zieltyp.
+        auswahl = [t for t in state["engere_auswahl"].get(uid, [])
+                   if t in typnamen]
+        if len(auswahl) != len(state["engere_auswahl"].get(uid, [])):
+            hinweise.append("In der engeren Auswahl wurden Typen entfernt, "
+                            "die es in der Morphologie nicht gibt.")
+        state["engere_auswahl"][uid] = auswahl
+        ziel = state["zieltyp"].get(uid)
+        if ziel is not None and ziel not in typnamen:
+            hinweise.append("Der Zieltyp '%s' ist in der Morphologie nicht "
+                            "vorhanden und wurde entfernt." % ziel)
+            state["zieltyp"][uid] = None
+        state["zieltyp"].setdefault(uid, None)
+
+        # 4) Soll, Aufwand, Kosten, Dauer (je Einheit und Typ).
+        for ebene in ("soll", "aufwand", "kosten", "dauer"):
+            je_typ = state[ebene].setdefault(uid, {})
+            for typ in list(je_typ.keys()):
+                if typ not in typnamen:
+                    del je_typ[typ]
+                    continue
+                je_merkmal = je_typ[typ]
+                if not isinstance(je_merkmal, dict):
+                    del je_typ[typ]
+                    continue
+                for m in list(je_merkmal.keys()):
+                    if m not in merkmale:
+                        del je_merkmal[m]
+                    elif ebene == "soll" and not erlaubt(m, je_merkmal[m]):
+                        del je_merkmal[m]
+                        hinweise.append(
+                            "Die Ziel-Ausprägung bei Merkmal '%s' ist in der "
+                            "Morphologie nicht vorhanden und wurde "
+                            "entfernt." % m)
+
+        # 5) Massnahmen je Merkmal.
+        massnahmen = state["massnahmen"].setdefault(uid, {})
+        for m in list(massnahmen.keys()):
+            if m not in merkmale:
+                del massnahmen[m]
+        state["namen"].setdefault(uid, "")
+
+    # 6) Gewichte: nur bekannte Merkmale, Wert mindestens 1.
+    gewichte = state.setdefault("gewichte", {})
+    for m in list(gewichte.keys()):
+        if m not in merkmale:
+            del gewichte[m]
+            continue
+        try:
+            gewichte[m] = max(1.0, float(gewichte[m]))
+        except (TypeError, ValueError):
+            gewichte[m] = 1.0
+
+    # 7) Zusammengelegte Aenderungen und ihre Werte.
+    buendel = set()
+    for paar in state.get("buendel", set()):
+        if (isinstance(paar, tuple) and len(paar) == 2
+                and paar[0] in merkmale and erlaubt(paar[0], paar[1])):
+            buendel.add(paar)
+    if len(buendel) != len(state.get("buendel", set())):
+        hinweise.append("Zusammengelegte Änderungen wurden entfernt, die sich "
+                        "nicht mehr auf die Morphologie beziehen.")
+    state["buendel"] = buendel
+    werte = state.setdefault("buendel_werte", {})
+    for schluessel in list(werte.keys()):
+        if schluessel not in buendel:
+            del werte[schluessel]
+
+    # 8) Synergien und Massnahmen der unternehmensweiten Aenderungen. Beide
+    # verwenden Handlungsfeld-Schluessel der Form ("b", merkmal, soll) oder
+    # ("e", uid, merkmal).
+    def schluessel_gueltig(s):
+        if not isinstance(s, tuple) or not s:
+            return False
+        if s[0] == "b":
+            return (len(s) == 3 and s[1] in merkmale and erlaubt(s[1], s[2]))
+        if s[0] == "e":
+            return (len(s) == 3 and s[1] in einheiten and s[2] in merkmale)
+        return False
+
+    synergien = []
+    for g in state.get("synergien", []):
+        if not isinstance(g, dict):
+            continue
+        felder = frozenset(s for s in g.get("felder", frozenset())
+                           if schluessel_gueltig(s))
+        if len(felder) >= 2:
+            g["felder"] = felder
+            synergien.append(g)
+    if len(synergien) != len(state.get("synergien", [])):
+        hinweise.append("Zusammengelegte Änderungen wurden entfernt, deren "
+                        "Bestandteile nicht mehr vorhanden sind.")
+    state["synergien"] = synergien
+
+    hf = state.setdefault("hf_massnahmen", {})
+    for s in list(hf.keys()):
+        if not schluessel_gueltig(s):
+            del hf[s]
+
+    # 9) Nutzwertanalyse: Kriterien und manuelle Werte.
+    krit = state.get("nwa_kriterien")
+    if not isinstance(krit, list) or not krit:
+        state["nwa_kriterien"] = [dict(k) for k in NWA_STANDARD]
+    else:
+        state["nwa_kriterien"] = [k for k in krit
+                                  if isinstance(k, dict) and k.get("name")]
+    namen_krit = {k["name"] for k in state["nwa_kriterien"]}
+    nwa_werte = state.setdefault("nwa_werte", {})
+    for s in list(nwa_werte.keys()):
+        if (not isinstance(s, tuple) or len(s) != 2
+                or s[0] not in einheiten or s[1] not in namen_krit):
+            del nwa_werte[s]
+
+    # 10) Phase und Zaehler.
+    if state.get("phase") not in ("konfiguration", "ergebnis", "potential",
+                                  "ergebnis_soll", "detaillierung",
+                                  "zusammenfassung", "massnahmen"):
+        state["phase"] = "konfiguration"
+    try:
+        state["vergeben"] = max(int(state.get("vergeben", 0)),
+                                len(state["units"]))
+    except (TypeError, ValueError):
+        state["vergeben"] = len(state["units"])
+
+    # Gleiche Hinweise nur einmal melden.
+    gesehen = []
+    for h in hinweise:
+        if h not in gesehen:
+            gesehen.append(h)
+    return gesehen
